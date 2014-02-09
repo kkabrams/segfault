@@ -1,0 +1,3 @@
+!leetuntail * /home/segfault/files/cmd_out
+!rawtail /home/segfault/files/cmd_out
+!leetappend /home/segfault/files/cmd_in 10 %s

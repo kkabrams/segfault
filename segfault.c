@@ -8,7 +8,6 @@
 #include <fcntl.h>
 #include <irc.h>
 #include <time.h>
-#include "config.h"
 
 #define SERVER "192.168.0.2"
 #define PORT "6667"
@@ -22,10 +21,6 @@
 
 #define RAWLOG "./files/rawlog"
 #define LOG "./files/log"
-#define NEWS_PIPE "./files/news"
-#define LINKS_FILE "/var/www/docs/IRClinks.txt"
-#define NEWS_FILE "/var/www/cgi-bin/info/news.html"
-#define PID_FILE "./files/my.pid"
 
 #define MAXTAILS 400 //just to have it more than the system default.
 
@@ -62,7 +57,7 @@ void mywrite(int fd,char *b) {
 void ircmode(int fd,char *channel,char *mode,char *nick) {
  int sz=5+strlen(channel)+1+strlen(mode)+1+strlen(nick)+3;//"MODE ", " ", " ","\r\n\0"
  char *hrm=malloc(sz+1);
- if(!hrm) return (void)mywrite(fd,"QUIT :malloc error 1! holy shit!\r\n");
+ if(!hrm) return mywrite(fd,"QUIT :malloc error 1! holy shit!\r\n");
  snprintf(hrm,sz,"MODE %s %s %s\r\n",channel,mode,nick);
  write(fd,hrm,strlen(hrm));
  free(hrm); 
@@ -163,11 +158,13 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
  notargs[c]=strdup(fmt+j);
  sz+=strlen(notargs[c]);
  output=malloc(sz+1);
+ output[0]=0;
  for(i=0;i<c;i++) {
   strcat(output,notargs[i]);
   strcat(output,args[i]);
  }
  strcat(output,notargs[i]);
+ output[sz]=0;
  free(fmt);
  return output;
 }
@@ -1044,7 +1041,6 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
 int main(int argc,char *argv[]) {
  int fd;
  int c;
- chdir("/home/segfault");
  redirect_to_fd=-1;
  debug=0;
  lines_sent=0;
