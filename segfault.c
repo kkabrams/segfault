@@ -112,6 +112,67 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones);
 void c_untail(int fd,char *from, char *file);
 
 char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
+ int i,j;
+ int sz=0,c=1;
+ char *output;
+ char *fmt=strdup(orig_fmt);
+ char **args,**notargs;
+ for(i=0;fmt[i];i++) {
+  if(fmt[i] == '%') {
+   i++;
+   switch(fmt[i]) {
+     case 'u':
+     case 'f':
+     case 's':
+      c++;
+   }
+  }
+ }
+ args=malloc((sizeof(char *)) * (c + 1));
+ notargs=malloc((sizeof(char *)) * (c + 2));
+ c=0;
+ for(j=0,i=0;fmt[i];i++) {
+  if(fmt[i] == '%') {
+   i++;
+   switch(fmt[i]) {
+     case 'u':
+      args[c]=nick;
+      break;
+     case 'f':
+      args[c]=from;
+      break;
+     case 's':
+      args[c]=arg;
+      break;
+   }
+   switch(fmt[i]) {
+     case 'u':
+     case 'f':
+     case 's':
+      fmt[i-1]=0;
+      notargs[c]=strdup(fmt+j);
+      sz+=strlen(args[c]);
+      sz+=strlen(notargs[c]);
+      c++;
+      i++;
+      j=i;
+      break;
+   }
+  }
+ }
+ notargs[c]=strdup(fmt+j);
+ sz+=strlen(notargs[c]);
+ output=malloc(sz+1);
+ for(i=0;i<c;i++) {
+  strcat(output,notargs[i]);
+  strcat(output,args[i]);
+ }
+ strcat(output,notargs[i]);
+ free(fmt);
+ return output;
+}
+/*
+char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
  int i;
  int c=1;
  char *fmt=strdup(orig_fmt);
@@ -167,7 +228,7 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
  free(fmt);
  return output;
 }
-
+*/
 //get rid of this?
 char *good_format_string(int fd,char *from,char *line) {
  int i;
