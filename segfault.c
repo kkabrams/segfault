@@ -149,8 +149,7 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
       sz+=strlen(args[c]);
       sz+=strlen(notargs[c]);
       c++;
-      i++;
-      j=i;
+      j=i+1;
       break;
    }
   }
