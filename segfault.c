@@ -6,36 +6,32 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <irc.h>
 #include <time.h>
+#include <irc.h> //epoch's libirc. should be included with segfault.
 
-#define SERVER "192.168.0.2"
-#define PORT "6667"
-#define NICK "SegFault"
 
-#define LINE_LIMIT line_limit
-
-#define LINES_SENT_LIMIT 1
-
-#define LINELEN 400
-
-#define RAWLOG "./files/rawlog"
-#define LOG "./files/log"
-
-#define MAXTAILS 400 //just to have it more than the system default.
-
+//might want to change some of these.
+#define SERVER			"192.168.0.2"
+#define PORT			"6667"
+#define NICK			"SegFault" //override with argv[0]
+#define LINE_LIMIT		line_limit
+#define LINES_SENT_LIMIT	1
+#define LINELEN			400
+#define RAWLOG			"/home/segfault/files/rawlog"
+#define LOG			"/home/segfault/files/log"
+#define MAXTAILS		400 //just to have it more than the system default.
 #define BS 502
-
-//!c uses 56 for its tail.
-// 56 = 32 + 16 + 8 = 0x38 = 0x20+0x10+0x8 = SPAM | BEGIN | MSG
-#define TAILO_RAW    (0x1)
-#define TAILO_EVAL   (0x2)
-#define TAILO_CLOSE  (0x4)
-#define TAILO_MSG    (0x8)
-#define TAILO_BEGIN  (0x10)
+// !c uses 56 for its tail.
+// 56 == 32 + 16 + 8 == 0x38 == 0x20+0x10+0x8 == SPAM | BEGIN | MSG
+#define TAILO_RAW    (0x1) //output gets sent directly to server
+#define TAILO_EVAL   (0x2) //interpret the lines read from the tail as if they were messages to segfault
+#define TAILO_CLOSE  (0x4) //close the file at EOF, default is to leave it open.
+#define TAILO_MSG    (0x8) //output gets sent as a PM to the place the tail was made.
+#define TAILO_BEGIN  (0x10) //start the tail at the beginning of the file instead of the end.
 #define TAILO_SPAM   (0x20) //Spam control is enabled for this stream.
 #define TAILO_ENDMSG (0x40) //show a message when the tail reaches the end of a chunk
-#define TAILO_Q_EVAL (TAILO_EVAL|TAILO_CLOSE|TAILO_BEGIN) //0x2+0x4+0x10= 2+4+16=22
+#define TAILO_Q_EVAL (TAILO_EVAL|TAILO_CLOSE|TAILO_BEGIN) //0x2+0x4+0x10 = 2+4+16  = 22
+#define TAILO_Q_COUT (TAILO_SPAM|TAILO_BEGIN|TAILO_MSG)  //0x20+0x10+0x8 = 32+16+8 = 56
 
 
 int start_time;
@@ -45,8 +41,31 @@ int line_limit;
 int debug;
 timer_t timer;
 int lines_sent;
+unsigned long oldtime;
 
-//this should add a line to an outgoing queue?
+
+struct tail {
+ FILE *fp;
+ char *file;
+ char *to;
+ char *args;
+ char opt;
+ unsigned int inode;
+ int lines;
+} tailf[MAXTAILS];
+
+struct alias {
+ char *original;
+ char *target;
+ struct alias *prev;// doubly linked list.
+ struct alias *next;
+} *a_start,*a_end;
+
+
+void message_handler(int fd,char *from,char *nick,char *msg,int redones);
+void c_untail(int fd,char *from, char *file);
+
+
 void mywrite(int fd,char *b) {
  if(!b) return;
  if(fd<0) return;
@@ -66,20 +85,10 @@ void ircmode(int fd,char *channel,char *mode,char *nick) {
 void privmsg(int fd,char *who,char *msg) {
  int i=0;
  char *chunk;
- if(!who) {
-  who="epoch";
-  msg="didn't have a who. sending this.";
- }
- if(!msg) {
-  who="epoch";
-  msg="didn't have a message. sending this.";
- }
- if(!msg && !who) {
-  who="epoch";
-  msg="didn't have a message or a who. sending this.";
- }
  int sz;
  int cs;
+ if(!who) return;
+ if(!msg) return;
  for(i=0;i<strlen(msg);i+=LINELEN) {
   cs=(strlen(msg+i)<=LINELEN)?strlen(msg+i):LINELEN;
   sz=8+strlen(who)+2+cs+3;//"PRIVMSG ", " :", "\r\n\0";
@@ -87,38 +96,22 @@ void privmsg(int fd,char *who,char *msg) {
   if(!hrm) return (void)mywrite(fd,"QUIT :malloc error 2! holy shit!\r\n");
   chunk=strndup(msg+i, cs );
   snprintf(hrm,sz+1,"PRIVMSG %s :%s\r\n",who,chunk);
-  mywrite(fd,hrm);//not this...
+  mywrite(fd,hrm);
   free(hrm);
   free(chunk);
  }
 }
 
-struct tail {
- FILE *fp;
- char *file;
- char *to;
- char *args;
- char opt;
- unsigned int inode;
- int lines;
-} tailf[MAXTAILS];
-
-void message_handler(int fd,char *from,char *nick,char *msg,int redones);
-void c_untail(int fd,char *from, char *file);
-
+//try to shorten this up sometime...
 char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
- int i,j;
- int sz=0,c=1;
- char *output;
- char *fmt=strdup(orig_fmt);
+ int i,j,sz=0,c=1;
+ char *output,*fmt=strdup(orig_fmt);
  char **args,**notargs;
  for(i=0;fmt[i];i++) {
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'u':
-     case 'f':
-     case 's':
+     case 'u':case 'f':case 's':
       c++;
    }
   }
@@ -130,27 +123,14 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'u':
-      args[c]=nick;
-      break;
-     case 'f':
-      args[c]=from;
-      break;
-     case 's':
-      args[c]=arg;
-      break;
-   }
-   switch(fmt[i]) {
-     case 'u':
-     case 'f':
-     case 's':
+     case 'u':case 'f':case 's':
+      args[c]=(fmt[i]=='u')?nick:((fmt[i]=='f')?from:arg);
       fmt[i-1]=0;
       notargs[c]=strdup(fmt+j);
       sz+=strlen(args[c]);
       sz+=strlen(notargs[c]);
       c++;
       j=i+1;
-      break;
    }
   }
  }
@@ -167,106 +147,21 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
  free(fmt);
  return output;
 }
-/*
-char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
- int i;
- int c=1;
- char *fmt=strdup(orig_fmt);
- for(i=0;fmt[i];i++) {
-  if(fmt[i] == '%') {
-   i++;
-   switch(fmt[i]) {
-     case 0:
-      printf("error! last character is a '%%'!!!\n");
-      exit(1);
-     case 'u':
-     case 'f':
-     case 's':
-      c++;
-   }
-  }
- }
- char **args=malloc((sizeof(char *)) * (c + 1));
- c=0;
- for(i=0;fmt[i];i++) {
-  if(fmt[i] == '%') {
-   i++;
-   switch(fmt[i]) {
-     case 0:
-      printf("error! last character is a '%%'!!!\n");
-      exit(1);
-     case 'u':
-      args[c]=nick;
-      fmt[i]='s';
-      c++;
-      break;
-     case 'f':
-      args[c]=from;
-      fmt[i]='s';
-      c++;
-      break;
-     case 's':
-      args[c]=arg;
-      c++;
-      break;
-   }
-  }
- }
-// args[c]=0;
-// for(i=0;i<c;i++) {
-//  printf("args[%d]=%s\n",i,args[i]);
-// }
-// printf("format string: %s\nc: %d\n",fmt,c);
- int sz=vprintf(fmt,(va_list)args)+1;
-// printf("\nsize: %d\n",sz);
- char *output=malloc(sz);
- vsnprintf(output,sz,fmt,(va_list)args);
- free(fmt);
- return output;
-}
-*/
-//get rid of this?
-char *good_format_string(int fd,char *from,char *line) {
- int i;
- char tmp[256];
- int scount=0;
- for(i=0;line[i];i++) {
-  if(line[i] == '%') {
-   if(!line[i+1]) {
-    privmsg(fd,from,"bad format string. you have a % as the last character.");
-    return 0;
-   }
-   if(line[i+1] == 's') scount++;
-   if( (line[i+1] != 's' && line[i+1] != '%') || (line[i+1] == 's' && scount>1)) {
-    privmsg(fd,from,"can only use %s and only once.");
-    snprintf(tmp,sizeof(tmp)-1,"bad format string: %s",line);
-    privmsg(fd,from,tmp);
-    return 0;
-   }
-   i++;
-  }
- }
- return line;
-}
-//this has a LOT of shit in it.
-unsigned long oldtime;
 
+//this function got scary.
 void extra_handler(int fd) {
  if(oldtime == time(0) && lines_sent > LINES_SENT_LIMIT) {//if it is still the same second, skip this function.
   return;
- } else {//different second. reset count.
+ } else {
   lines_sent=0;
  }
- int i;
- int tmpo;
+ int tmpo,i;
  static int mmerp=0;
  char tmp[BS+1];
  char *tmp2;
-
  if(redirect_to_fd != -1) {
   fd=redirect_to_fd;
  }
-
  for(i=0;i<MAXTAILS;i++) {
   if(tailf[i].fp) {
    if(feof(tailf[i].fp)) {
@@ -420,13 +315,6 @@ void startup_stuff(int fd) {
  c_leettail(fd,"#cmd","22./scripts/startup");
 }
 
-struct alias {
- char *original;
- char *target;
- struct alias *prev;// doubly linked list.
- struct alias *next;
-} *a_start,*a_end;
-
 #if 0 ////////////////////////// HASH TABLE SHIT /////////////////////////////////
 
 unsigned short hash(char *v) {//maybe use a seeded rand()? :) yay FreeArtMan.
@@ -573,7 +461,6 @@ void c_alias(int fd,char *from,char *line) {
   privmsg(fd,from,"not an alias.");
   return;
  }
- //line=good_format_string(fd,from,line);
  if(!line) return;
  *derp=0;
  for(tmp=a_start;tmp;tmp=tmp->next) {
@@ -869,19 +756,19 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  if(!strncmp(msg,"!leetsetout ",12)) {
   c_leetsetout(fd,from,msg+12);
  }
- else if(!strncmp(msg,"!whoami",7)) {
+ else if(!strncmp(msg,"!whoami",7) && !msg[7]) {
   privmsg(fd,from,nick);
  }
- else if(!strncmp(msg,"!whereami",9)) {
+ else if(!strncmp(msg,"!whereami",9) && !msg[9]) {
   privmsg(fd,from,from);
  }
- else if(!strncmp(msg,"!resetout",9)) {
+ else if(!strncmp(msg,"!resetout",9) && !msg[9]) {
   c_resetout(fd,from);
  }
- else if(!strncmp(msg,"!botup",6)) {
+ else if(!strncmp(msg,"!botup",6) && !msg[6]) {
   c_botup(fd,from);
  }
- else if(!strncmp(msg,"!linelimit",10)) {
+ else if(!strncmp(msg,"!linelimit",10) && (!msg[10] || msg[10] == ' ')) {
   c_linelimit(fd,from,*(msg+10)?msg+11:0);  
  }
  else if(!strncmp(msg,"!tailunlock ",12)) {
@@ -890,7 +777,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  else if(!strncmp(msg,"!changetail ",12)) {
   c_changetail(fd,from,msg+12);
  }
- else if(!strncmp(msg,"!tails",6)) {
+ else if(!strncmp(msg,"!tails",6) && !msg[6]) {
   c_tails(fd,from);
  }
  else if(!strncmp(msg,"!record ",8)) {
@@ -922,7 +809,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  else if(!strncmp(msg,"!say ",5)) {
   privmsg(fd,from,msg+5);
  }
- else if(!strncmp(msg,"!id",3)) {
+ else if(!strncmp(msg,"!id",3) && !msg[3]) {
   c_id(fd,from);
  }
  else if(!strncmp(msg,"!kill ",6)) {
@@ -934,7 +821,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  else if(!strncmp(msg,"!rmalias ",9)) {
   c_rmalias(fd,from,msg+9);
  }
- else if(!strncmp(msg,"!aliases",8)) {
+ else if(!strncmp(msg,"!aliases",8) && (!msg[8] || msg[8] == ' ')) {
   c_aliases(fd,from,*(msg+8)?msg+9:0);
  }
  else if(redones < 5) {
