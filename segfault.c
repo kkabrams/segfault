@@ -35,6 +35,7 @@
 
 
 int start_time;
+char *segnick;
 char *redo;
 int redirect_to_fd;
 int line_limit;
@@ -75,8 +76,11 @@ void mywrite(int fd,char *b) {
 
 void ircmode(int fd,char *channel,char *mode,char *nick) {
  int sz=5+strlen(channel)+1+strlen(mode)+1+strlen(nick)+3;//"MODE ", " ", " ","\r\n\0"
- char *hrm=malloc(sz+1);
- if(!hrm) return mywrite(fd,"QUIT :malloc error 1! holy shit!\r\n");
+ char *hrm;
+ if(!(hrm=malloc(sz+1))) {
+  mywrite(fd,"QUIT :malloc error 1! holy shit!\r\n");
+  return;
+ }
  snprintf(hrm,sz,"MODE %s %s %s\r\n",channel,mode,nick);
  write(fd,hrm,strlen(hrm));
  free(hrm); 
@@ -84,7 +88,7 @@ void ircmode(int fd,char *channel,char *mode,char *nick) {
 
 void privmsg(int fd,char *who,char *msg) {
  int i=0;
- char *chunk;
+ char *chunk,*hrm;
  int sz;
  int cs;
  if(!who) return;
@@ -92,8 +96,10 @@ void privmsg(int fd,char *who,char *msg) {
  for(i=0;i<strlen(msg);i+=LINELEN) {
   cs=(strlen(msg+i)<=LINELEN)?strlen(msg+i):LINELEN;
   sz=8+strlen(who)+2+cs+3;//"PRIVMSG ", " :", "\r\n\0";
-  char *hrm=malloc(sz);
-  if(!hrm) return (void)mywrite(fd,"QUIT :malloc error 2! holy shit!\r\n");
+  if(!(hrm=malloc(sz))) {
+   mywrite(fd,"QUIT :malloc error 2! holy shit!\r\n");
+   return;
+  }
   chunk=strndup(msg+i, cs );
   snprintf(hrm,sz+1,"PRIVMSG %s :%s\r\n",who,chunk);
   mywrite(fd,hrm);
@@ -111,7 +117,7 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'u':case 'f':case 's':
+     case 'u':case 'f':case 's':case 'm'://when adding new format things add here and...
       c++;
    }
   }
@@ -123,8 +129,12 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'u':case 'f':case 's':
-      args[c]=(fmt[i]=='u')?nick:((fmt[i]=='f')?from:arg);
+     case 'u':case 'f':case 's':case 'm'://here.
+      args[c]=((fmt[i]=='u')?nick:
+               ((fmt[i]=='f')?from:
+                ((fmt[i]=='m')?segnick://and here.
+                 arg
+              )));
       fmt[i-1]=0;
       notargs[c]=strdup(fmt+j);
       sz+=strlen(args[c]);
@@ -150,21 +160,21 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
 
 //this function got scary.
 void extra_handler(int fd) {
+ int tmpo,i;
+ static int mmerp=0;
+ char tmp[BS+1];
+ char *tmp2;
  if(oldtime == time(0) && lines_sent > LINES_SENT_LIMIT) {//if it is still the same second, skip this function.
   return;
  } else {
   lines_sent=0;
  }
- int tmpo,i;
- static int mmerp=0;
- char tmp[BS+1];
- char *tmp2;
  if(redirect_to_fd != -1) {
   fd=redirect_to_fd;
  }
- for(i=0;i<MAXTAILS;i++) {
-  if(tailf[i].fp) {
-   if(feof(tailf[i].fp)) {
+ for(i=0;i<MAXTAILS;i++) {//why does this loop through ALL tails instead of just however many there are?
+  if(tailf[i].fp) {       //I think I had it using a variable but that ended up being messy and doing this
+   if(feof(tailf[i].fp)) {//ended up being a HELL of a lot easier... maybe fix it sometime.
     clearerr(tailf[i].fp);
     if(tailf[i].opt & TAILO_CLOSE) {//use for eval
      c_untail(fd,tailf[i].to,tailf[i].file);
@@ -175,6 +185,7 @@ void extra_handler(int fd) {
    if(!(tailf[i].opt & TAILO_BEGIN)) {
     if(fseek(tailf[i].fp,0,SEEK_END) == -1) {
      while(fgetc(tailf[i].fp) != -1);//this is used on named pipes usually.
+     clearerr(tailf[i].fp);
     }
    }
    if(ftell(tailf[i].fp) < tmpo) {
@@ -190,12 +201,15 @@ void extra_handler(int fd) {
      if(strchr(tmp,'\n')) *strchr(tmp,'\n')=0;
      if(tailf[i].opt & TAILO_EVAL) {//eval
       if(tailf[i].args) { //only format magic evaled file lines if they have args.
-       tmp2=format_magic(fd,tailf[i].to,NICK,tmp,tailf[i].args);
+       tmp2=format_magic(fd,tailf[i].to,segnick,tmp,tailf[i].args);
       } else {
        tmp2=strdup(tmp);
-       if(!tmp2) return perror("ZOMG malloc error in eval section!!!");
+       if(!tmp2) {
+        perror("ZOMG malloc error in eval section!!!");
+        return;
+       }
       }
-      message_handler(fd,tailf[i].to,NICK,tmp2,0); // FIX ME?!? don't use NICK... make it a global for segfault's nick.
+      message_handler(fd,tailf[i].to,segnick,tmp2,0);
       free(tmp2);
      }
      if(tailf[i].opt & TAILO_RAW) {//raw
@@ -256,14 +270,25 @@ void file_tail(int fd,char *from,char *file,char *args,char opt) {
   fcntl(fileno(tailf[i].fp),F_SETFL,O_NONBLOCK);
   if(!(opt & TAILO_BEGIN)) fseek(tailf[i].fp,0,SEEK_END);
   tailf[i].to=malloc(strlen(from)+1);
-  if(!tailf[i].to) return (void)mywrite(fd,"QUIT :malloc error 3!!!\r\n");
+  if(!tailf[i].to) {
+   mywrite(fd,"QUIT :malloc error 3!!!\r\n");
+   return;
+  }
   strcpy(tailf[i].to,from);
   tailf[i].file=malloc(strlen(file)+1);
-  if(!tailf[i].file) return (void)mywrite(fd,"QUIT :malloc error 4!!!\r\n");
+  if(!tailf[i].file) {
+   mywrite(fd,"QUIT :malloc error 4!!!\r\n");
+   return;
+  }
   tailf[i].opt=opt;
   tailf[i].inode=st.st_ino;
   tailf[i].args=args?strdup(args):0;
-  if(args) if(!tailf[i].args) return (void)mywrite(fd,"QUIT :malloc error 5!!! (well, strdup)\r\n");
+  if(args) {
+   if(!tailf[i].args) {
+    mywrite(fd,"QUIT :malloc error 5!!! (well, strdup)\r\n");
+    return;
+   }
+  }
   tailf[i].lines=0;
   strcpy(tailf[i].file,file);
  }
@@ -429,6 +454,7 @@ void c_rmalias(int fd,char *from,char *line) {
 void c_kill(int fd,char *from,char *line) {
  char *csig=line;
  char *cpid=strchr(line,' ');
+ int sig,pid;
  if(cpid) {
   *cpid=0;
   cpid++;
@@ -436,8 +462,8 @@ void c_kill(int fd,char *from,char *line) {
   privmsg(fd,from,"usage: !kill signum pid");
   return;
  }
- int sig=atoi(csig);
- int pid=atoi(cpid);
+ sig=atoi(csig);
+ pid=atoi(cpid);
  if(sig && pid) {
   if(kill(pid,sig)) privmsg(fd,from,"kill error");
   else privmsg(fd,from,"signal sent");
@@ -449,7 +475,7 @@ void c_kill(int fd,char *from,char *line) {
 //CONVERT
 void c_alias(int fd,char *from,char *line) {
  char *derp=strchr(line,' ');
- struct alias *tmp;
+ struct alias *tmp,*tmp2;
  char tmps[256];
  if(!derp) {
   for(tmp=a_start;tmp;tmp=tmp->next) {
@@ -471,8 +497,11 @@ void c_alias(int fd,char *from,char *line) {
   }
  }
  tmp=a_end;
- struct alias *tmp2=malloc(sizeof(struct alias)+20);
- if(!tmp2) return (void)mywrite(fd,"QUIT :malloc error 7!!!\r\n");
+ tmp2=malloc(sizeof(struct alias)+20);
+ if(!tmp2) {
+  mywrite(fd,"QUIT :malloc error 7!!!\r\n");
+  return;
+ }
  if(a_end == 0) {
   a_end=tmp2;
   a_start=tmp2;
@@ -570,9 +599,9 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
  int fdd;
  char tmp[512];
  char derp[2];
+ FILE *fp;
  derp[0]=(char)nl;
  derp[1]=0;
- FILE *fp;
  if(line == 0) return mywrite(fd,"QUIT :line == 0 in append_file\r\n"),-1;
  fdd=open(file,O_WRONLY|O_NONBLOCK|O_APPEND|O_CREAT,0640);//HAVE to open named pipes as nonblocking.
  if(fdd == -1) {
@@ -641,7 +670,10 @@ void c_tails(int fd,char *from) {
   if(tailf[i].fp) {
    l=(strlen(tailf[i].file) + strlen(tailf[i].to) + 50);//??? hack. fix it.
    tmp=malloc(l);
-   if(!tmp) return (void)mywrite(fd,"QUIT :malloc error 8\r\n");
+   if(!tmp) {
+    mywrite(fd,"QUIT :malloc error 8\r\n");
+    return;
+   }
    snprintf(tmp,l,"%s [i:%d] @ %ld (%d) --[%s(%02x)]--> %s",tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,tailmode_to_txt(tailf[i].opt),tailf[i].opt,tailf[i].to);
    privmsg(fd,from,tmp);
    free(tmp);
@@ -756,6 +788,9 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  if(!strncmp(msg,"!leetsetout ",12)) {
   c_leetsetout(fd,from,msg+12);
  }
+ else if(!strncmp(msg,"!whoareyou",10) && !msg[10]) {
+  privmsg(fd,from,segnick);
+ }
  else if(!strncmp(msg,"!whoami",7) && !msg[7]) {
   privmsg(fd,from,nick);
  }
@@ -834,7 +869,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
     //if(!redo) (void *)mywrite(fd,"QUIT :malloc error 9!!!\r\n");
     //this is where the format string is used...
     //generate an array based on the format string containing %N stuff in the right order.
-    // %u = user, %f = from (user/channel)
+    // %u = user, %f = from (user/channel), %s = argument
     // handling it here would be a bitch. maybe
     // redo=apply_alias(fd,from,sz,m->target) ??? new function would probably be good.
     redo=format_magic(fd,from,nick,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1));
@@ -919,7 +954,22 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  }
  if(s && nick && t) {
   if(!strcmp(s,"JOIN")) {
-   ircmode(fd,t+1,"+v",nick);
+   ircmode(fd,t+1,"+v",nick);//why t+1? it starts with :?
+  }
+  if(!strcmp(s,"MODE")) {
+   if(u) {
+    if(*u == '-') {//auto-give modes back that are removed in front of segfault.
+     *u='+';
+     ircmode(fd,t,u,"");//u contains the nick the mode is being removed from.
+    }
+   }
+  }
+//:Ishikawa-!~epoch@localhost NICK :checking
+  if(!strcmp(s,"NICK")) {
+   if(!strcmp(nick,segnick)) {
+    free(segnick);
+    segnick=strdup(t+1);
+   }
   }
  }
 }
@@ -937,9 +987,10 @@ int main(int argc,char *argv[]) {
  a_start=0;
  a_end=0;
  redo=0;
+ segnick=strdup(NICK);
  printf("starting segfault...\n");
  for(c=0;c<MAXTAILS;c++) tailf[c].fp=0;
- fd=ircConnect(SERVER,PORT,argc>1?argv[1]:NICK,"segfault segfault segfault :segfault");
+ fd=ircConnect(SERVER,PORT,argc>1?argv[1]:"SegFault","segfault segfault segfault :segfault");
  startup_stuff(fd);
  return runit(fd,line_handler,extra_handler);
 }
