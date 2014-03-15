@@ -9,7 +9,6 @@
 #include <time.h>
 #include <irc.h> //epoch's libirc. should be included with segfault.
 
-
 //might want to change some of these.
 #define SERVER			"192.168.0.2"
 #define PORT			"6667"
@@ -21,6 +20,7 @@
 #define LOG			"/home/segfault/files/log"
 #define MAXTAILS		400 //just to have it more than the system default.
 #define BS 502
+#define TSIZE 65536             //size of hashtable. 65k isn't bad, right?
 // !c uses 56 for its tail.
 // 56 == 32 + 16 + 8 == 0x38 == 0x20+0x10+0x8 == SPAM | BEGIN | MSG
 #define TAILO_RAW    (0x1) //output gets sent directly to server
@@ -60,7 +60,7 @@ struct alias {
  char *target;
  struct alias *prev;// doubly linked list.
  struct alias *next;
-} *a_start,*a_end;
+};
 
 
 void message_handler(int fd,char *from,char *nick,char *msg,int redones);
@@ -158,6 +158,13 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
  return output;
 }
 
+void eofp(FILE *fp) {
+ if(fseek(fp,0,SEEK_END) == -1) {
+  while(fgetc(fp) != -1);//this is used on named pipes usually.
+ }
+ clearerr(fp);//might as well do it for all of them.
+}
+
 //this function got scary.
 void extra_handler(int fd) {
  int tmpo,i;
@@ -183,10 +190,7 @@ void extra_handler(int fd) {
    }
    tmpo=ftell(tailf[i].fp);
    if(!(tailf[i].opt & TAILO_BEGIN)) {
-    if(fseek(tailf[i].fp,0,SEEK_END) == -1) {
-     while(fgetc(tailf[i].fp) != -1);//this is used on named pipes usually.
-     clearerr(tailf[i].fp);
-    }
+    eofp(tailf[i].fp);
    }
    if(ftell(tailf[i].fp) < tmpo) {
     privmsg(fd,tailf[i].to,"tailed file shrank! resetting to NEW eof.");
@@ -340,93 +344,132 @@ void startup_stuff(int fd) {
  c_leettail(fd,"#cmd","22./scripts/startup");
 }
 
-#if 0 ////////////////////////// HASH TABLE SHIT /////////////////////////////////
-
-unsigned short hash(char *v) {//maybe use a seeded rand()? :) yay FreeArtMan.
- unsigned short h=0;
- //I only need the first two bytes hashed anyway. I'll make this better later.
- h=((*v)<<8)+(v?*(v+1):0);
- return h;
-}
-
-struct hitem {//with a stick
- char *key
- struct *alias value;//run through this linked list if it isn't the right one.
-};
-
-struct **hitem hashtable;
-
-void inittable() {
- int i;
- hashtable=malloc(sizeof(char *)*TSIZE);
- if(!hashtable) return (void *)fprintf(stderr,"malloc error 6 in hash table.\n");
- for(i=0;i<TSIZE;i++) {
-  hashtable[i]=0;
- }
-}
-
-void setkey_h(char *key,struct alias *value) {
- unsigned short h=hash(key);
- printf("setting: %s(%d)=a struct that contains a lot of shit.\n",key,h,value);
- if(!hashtable[h]) { //empty bucket!
-  hashtable[h]=malloc(sizeof(struct item));
-  
-  hashtable[h]->key=key;
-  hashtable[h]->value=value;//strdup this
-  return;
- }
- //filled bucket... oh shit.
- if(!strcmp(hashtable[h]->key,key)) { //same key. just change the value.
-  hashtable[h]->value=value;//free previous and strdup.
-  return;
- }
- else { //collision! add to the linked list.
-  for
- }
-}
-
-#endif ///////////////////////// HASH TABLE SHIT /////////////////////////////////
-
 void debug_time(int fd,char *from,char *msg) {
  char tmp[100];
-// struct itimerspec whattime;
  if(debug) {
-//  timer_gettime(timer,&whattime);
-//  snprintf(tmp,511,"%d.%d %d.%d",
-//           whattime.it_interval.tv_sec,
-//           whattime.it_value.tv_nsec,
-//           whattime.it_value.tv_sec,
-//           whattime.it_value.tv_nsec);
   snprintf(tmp,99,"%lu %s",time(0),msg?msg:"(no message)");//time() returns time_t which on BSD is a long.
   privmsg(fd,from,tmp);
  }
 }
 
-
-//CONVERT
-void c_aliases(int fd,char *from,char *line) {
+struct alias *leetgetalias(struct alias *start,char *msg) {
  struct alias *m;
- char tmp[512];
- int i=0,j=0;
-// debug_time(fd,from);
- if(!line){
-  privmsg(fd,from,"usage: !aliases [search-term]");
-  return;
- }
- for(m=a_start;m;m=m->next) {
-  if(strcasestr(m->target,line) || strcasestr(m->original,line)) {
-   snprintf(tmp,sizeof(tmp)-1,"%s -> %s",m->original,m->target);
-   privmsg(fd,from,tmp);
-   i++;
+ if(!msg) return NULL;
+ if(!start) return NULL;
+ for(m=start;m;m=m->next) {//optimize this. hash table?
+  if(!strncmp(msg,m->original,strlen(m->original)) && (msg[strlen(m->original)]==' ' || msg[strlen(m->original)] == 0)) {//this allows !c to get called when using !c2 if !c2 is defined after !c. >_>
+   return m;
   }
-  j++;
  }
- snprintf(tmp,sizeof(tmp)-1,"found %d of %d aliases",i,j);
- privmsg(fd,from,tmp);
-// debug_time(fd,from);
+ return NULL;
 }
 
-//CONVERT
+unsigned short hash(char *v) {//maybe use a seeded rand()? :) Thanks FreeArtMan
+ unsigned short h=0;
+ h=((*v)<<8)+(v?*(v+1):0);
+ srand(h);
+ return rand();
+}
+
+struct hitem {//with a stick
+ struct alias *ll;//run through this linked list if it isn't the right one.
+};
+
+struct hitem **hashtable;
+int htkeys[TSIZE];
+int htkl;
+
+void inittable() {
+ int i;
+ hashtable=malloc(sizeof(char *)*TSIZE);
+ if(!hashtable) {
+  fprintf(stderr,"malloc error 6 in hash table.\n");
+  return;
+ }
+ for(i=0;i<TSIZE;i++) {
+  hashtable[i]=0;
+ }
+}
+
+struct alias *getkey_h(char *key) {
+ unsigned short h=hash(key);
+ if(!hashtable[h]) return NULL;
+ return hashtable[h]->ll;
+}
+
+//this seems too complicated.
+void setkey_h(char *key,char *value) {
+ unsigned short h=hash(key);
+ struct alias *tmp;
+ int i;
+ for(i=0;i<htkl;i++) {
+  if(htkeys[i]==h) break;
+ }
+ htkeys[i]=h;
+ htkl=htkl>i+1?htkl:i+1;
+ if(!hashtable[h]) { //empty bucket!
+  //add this to the list of used buckets so we can easily
+  //use that list later for stuff.
+  hashtable[h]=malloc(sizeof(struct hitem));
+  hashtable[h]->ll=0;
+  //we now have a valid hashtable entry and a NULL ll in it.
+  //don't bother with the new ll entry yet...
+ }
+ if((tmp=leetgetalias(hashtable[h]->ll,key)) != NULL) {
+  //we found this alias in the ll. now to replace the value
+  free(tmp->target);
+  tmp->target=strdup(value);
+  return;
+ }
+ //else {
+  if(hashtable[h]->ll == NULL) {
+   hashtable[h]->ll=malloc(sizeof(struct alias));
+   hashtable[h]->ll->next=0;
+   hashtable[h]->ll->prev=0;
+   hashtable[h]->ll->original=strdup(key);
+   hashtable[h]->ll->target=strdup(value);
+  } else {
+   //go to the end and add another entry to the ll.
+   for(tmp=hashtable[h]->ll;tmp->next;tmp=tmp->next);
+   tmp->next=malloc(sizeof(struct alias));
+   tmp->next->prev=tmp;
+   tmp=tmp->next;
+   tmp->original=strdup(key);
+   tmp->target=strdup(value);
+   tmp->next=0;
+  }
+ //}
+}
+
+//#endif ///////////////////////// HASH TABLE SHIT /////////////////////////////////
+
+void c_aliases_h(int fd,char *from,char *line) {
+ char tmp[512];
+ struct alias *m;
+ int i,j=0,k=0;
+ if(!line){
+  privmsg(fd,from,"usage: !aliases_h [search-term]");
+  return;
+ }
+ for(i=0;i<htkl;i++) {
+  //snprintf(tmp,sizeof(tmp)-1,"aliases in bucket: %d",htkeys[i]);
+  //privmsg(fd,from,tmp);
+  for(m=hashtable[htkeys[i]]->ll;m;m=m->next) {
+   if(strcasestr(m->target,line) || strcasestr(m->original,line)) {
+    snprintf(tmp,sizeof(tmp)-1,"%s -> %s",m->original,m->target);
+    privmsg(fd,from,tmp);
+    j++;
+   }
+   k++;
+  }
+ }
+ snprintf(tmp,sizeof(tmp)-1,"found %d of %d aliases",j,k);
+ privmsg(fd,from,tmp);
+}
+
+//CONVERT //this is the last one that needs to be converted to
+// be used with the hashtable
+/*
 void c_rmalias(int fd,char *from,char *line) {
  struct alias *m;
  for(m=a_start;m;m=m->next) {
@@ -450,6 +493,29 @@ void c_rmalias(int fd,char *from,char *line) {
  privmsg(fd,from,"alias not found");
  return;
 }
+*/
+
+struct alias *getalias_h(char *msg) {
+ return leetgetalias(getkey_h(msg),msg);
+}
+
+void c_alias_h(int fd,char *from,char *line) {
+ char *derp=strchr(line,' ');
+ struct alias *tmp;
+ if(!derp) {
+  if((tmp=getalias_h(line)) != NULL) {
+   privmsg(fd,from,tmp->target);
+  } else {
+   privmsg(fd,from,"not an alias.");
+  }
+  return;
+ }
+ *derp=0;
+ derp++;
+ setkey_h(line,derp);
+}
+
+//hash table version
 
 void c_kill(int fd,char *from,char *line) {
  char *csig=line;
@@ -470,50 +536,6 @@ void c_kill(int fd,char *from,char *line) {
  } else {
   privmsg(fd,from,"pid or sig is 0. something is odd.");
  }
-}
-
-//CONVERT
-void c_alias(int fd,char *from,char *line) {
- char *derp=strchr(line,' ');
- struct alias *tmp,*tmp2;
- char tmps[256];
- if(!derp) {
-  for(tmp=a_start;tmp;tmp=tmp->next) {
-   if(!strcmp(line,tmp->original)) {
-    privmsg(fd,from,tmp->target);
-    return;
-   }
-  }
-  privmsg(fd,from,"not an alias.");
-  return;
- }
- if(!line) return;
- *derp=0;
- for(tmp=a_start;tmp;tmp=tmp->next) {
-  if(!strcmp(line,tmp->original)) {
-   snprintf(tmps,sizeof(tmps)-1,"duplicate alias: %s",line);
-   privmsg(fd,from,tmps);
-   return;
-  }
- }
- tmp=a_end;
- tmp2=malloc(sizeof(struct alias)+20);
- if(!tmp2) {
-  mywrite(fd,"QUIT :malloc error 7!!!\r\n");
-  return;
- }
- if(a_end == 0) {
-  a_end=tmp2;
-  a_start=tmp2;
-  a_end->prev=0;
- } else {
-  a_end->next=tmp2;
-  a_end=tmp2;
-  a_end->prev=tmp;
- }
- a_end->target=strdup(derp+1);
- a_end->original=strdup(line);
- a_end->next=0;
 }
 
 void c_id(int fd,char *from) {
@@ -537,6 +559,7 @@ void c_leetuntail(int fd,char *from,char *line) {
    for(i=0;i<MAXTAILS;i++) {
     if(tailf[i].fp && !strcmp(tailf[i].file,file)) {
      //c_untail(fd,tailf[i].to,file);
+     eofp(tailf[i].fp);
      fclose(tailf[i].fp);
      tailf[i].fp=0;
      free(tailf[i].to);
@@ -851,59 +874,36 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   c_kill(fd,from,msg+6);
  }
  else if(!strncmp(msg,"!alias ",7)) {
-  c_alias(fd,from,msg+7);
+  c_alias_h(fd,from,msg+7);
  }
- else if(!strncmp(msg,"!rmalias ",9)) {
-  c_rmalias(fd,from,msg+9);
- }
+/* else if(!strncmp(msg,"!rmalias ",9)) {
+  c_rmalias(fd,from,msg+9); //need to make a hashtable version
+ }*/
  else if(!strncmp(msg,"!aliases",8) && (!msg[8] || msg[8] == ' ')) {
-  c_aliases(fd,from,*(msg+8)?msg+9:0);
+  c_aliases_h(fd,from,*(msg+8)?msg+9:0);
  }
  else if(redones < 5) {
   debug_time(fd,from,"checking aliases...");
   //CONVERT
-  for(m=a_start;m;m=m->next) {//optimize this. hash table?
-   if(!strncmp(msg,m->original,strlen(m->original)) && (msg[strlen(m->original)]==' ' || msg[strlen(m->original)] == 0)) {//this allows !c to get called when using !c2 if !c2 is defined after !c. >_>
-    sz=(strlen(msg)-strlen(m->original)+strlen(m->target)+1);
-    //redo=malloc(sz);
-    //if(!redo) (void *)mywrite(fd,"QUIT :malloc error 9!!!\r\n");
-    //this is where the format string is used...
-    //generate an array based on the format string containing %N stuff in the right order.
-    // %u = user, %f = from (user/channel), %s = argument
-    // handling it here would be a bitch. maybe
-    // redo=apply_alias(fd,from,sz,m->target) ??? new function would probably be good.
-    redo=format_magic(fd,from,nick,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1));
-    //snprintf(redo,sz,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1) );
-    message_handler(fd,from,nick,redo,redones+1);
-    free(redo);
-    redo=0;
-    return;
-   }
+  if((m=getalias_h(msg)) != NULL) {
+   sz=(strlen(msg)-strlen(m->original)+strlen(m->target)+1);
+   redo=format_magic(fd,from,nick,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1));
+   message_handler(fd,from,nick,redo,redones+1);
+   free(redo);
+   redo=0;
+   return;
   }
   debug_time(fd,from,"finished checking aliases. not found.");
-  //privmsg(fd,from,msg);
-  //  '!c ' + (msg - '!');
-//  sz=(strlen(msg)+4);
-//  redo=malloc(sz);
-//  if(!redo) (void *)mywrite(fd,"QUIT :malloc error 10!!!\r\n");
-//  snprintf(redo,sz-1,"!c %s",msg+1);
-//  privmsg(fd,from,redo);
-//  message_handler(fd,from,nick,redo,redones+1);
-//  free(redo);
   redo=0;
   snprintf(tmp,sizeof(tmp),"unknown command: %s",msg);
   privmsg(fd,from,tmp);
-//  privmsg(fd,from,"I don't know what you're talking about, man.");
  }
  if(redones >=5) {
   privmsg(fd,from,"too much recursion.");
  }
- //debug_time(fd,from);
 }
 
 void line_handler(int fd,char *line) {//this should be built into the libary?
- //static int flag=0;
- //char *a=":hacking.allowed.org 366 ";
  char *s=line;
  char *nick=0,*name=0,*host=0;
  char *t=0,*u=0;
@@ -940,9 +940,6 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
  }
  //printf("<%s!%s@%s> '%s' '%s' '%s'\n",nick,name,host,s,t,u);
- //if(to_file!=0) {
- // fd=
- //}
  if(s && t && u) {
   if(!strcmp(s,"PRIVMSG")) {
    u++;
@@ -984,9 +981,9 @@ int main(int argc,char *argv[]) {
  recording=0;
  recording_raw=0;
  start_time=time(0);
- a_start=0;
- a_end=0;
+ htkl=0;
  redo=0;
+ inittable();
  segnick=strdup(NICK);
  printf("starting segfault...\n");
  for(c=0;c<MAXTAILS;c++) tailf[c].fp=0;
