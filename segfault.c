@@ -23,16 +23,30 @@
 #define TSIZE 65536             //size of hashtable. 65k isn't bad, right?
 // !c uses 56 for its tail.
 // 56 == 32 + 16 + 8 == 0x38 == 0x20+0x10+0x8 == SPAM | BEGIN | MSG
-#define TAILO_RAW    (0x1) //output gets sent directly to server
-#define TAILO_EVAL   (0x2) //interpret the lines read from the tail as if they were messages to segfault
-#define TAILO_CLOSE  (0x4) //close the file at EOF, default is to leave it open.
-#define TAILO_MSG    (0x8) //output gets sent as a PM to the place the tail was made.
-#define TAILO_BEGIN  (0x10) //start the tail at the beginning of the file instead of the end.
-#define TAILO_SPAM   (0x20) //Spam control is enabled for this stream.
-#define TAILO_ENDMSG (0x40) //show a message when the tail reaches the end of a chunk
+#define TAILO_RAW    (0x1) // r output gets sent directly to server
+#define TAILO_EVAL   (0x2) // e interpret the lines read from the tail as if they were messages to segfault
+#define TAILO_CLOSE  (0x4) // c close the file at EOF, default is to leave it open.
+#define TAILO_MSG    (0x8) // m output gets sent as a PM to the place the tail was made.
+#define TAILO_BEGIN  (0x10) //b start the tail at the beginning of the file instead of the end.
+#define TAILO_SPAM   (0x20) //s Spam control is enabled for this stream.
+#define TAILO_ENDMSG (0x40) //n show a message when the tail reaches the end of a chunk
 #define TAILO_Q_EVAL (TAILO_EVAL|TAILO_CLOSE|TAILO_BEGIN) //0x2+0x4+0x10 = 2+4+16  = 22
 #define TAILO_Q_COUT (TAILO_SPAM|TAILO_BEGIN|TAILO_MSG)  //0x20+0x10+0x8 = 32+16+8 = 56
 
+//this function isn't with the rest of them because... meh.
+char *tailmode_to_txt(int mode) {
+ char *modes="recmbsn";
+ int i,j=0;
+ char *m=malloc(strlen(modes));
+ for(i=0;i<strlen(modes);i++) {
+  if(mode & 1<<i) {
+   m[j]=modes[i];
+   j++;
+  }
+ }
+ m[j]=0;
+ return m;
+}
 
 int start_time;
 char *segnick;
@@ -111,8 +125,9 @@ void privmsg(int fd,char *who,char *msg) {
 //try to shorten this up sometime...
 char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
  int i,j,sz=0,c=1;
- char *output,*fmt=strdup(orig_fmt);
+ char *output,*fmt;
  char **args,**notargs;
+ if(!(fmt=strdup(orig_fmt))) return 0;
  for(i=0;fmt[i];i++) {
   if(fmt[i] == '%') {
    i++;
@@ -162,10 +177,10 @@ void eofp(FILE *fp) {
  if(fseek(fp,0,SEEK_END) == -1) {
   while(fgetc(fp) != -1);//this is used on named pipes usually.
  }
- clearerr(fp);//might as well do it for all of them.
+ clearerr(fp);
 }
 
-//this function got scary.
+//this function got scary. basically handles all the tail magic.
 void extra_handler(int fd) {
  int tmpo,i;
  static int mmerp=0;
@@ -204,14 +219,10 @@ void extra_handler(int fd) {
      if(strchr(tmp,'\r')) *strchr(tmp,'\r')=0;
      if(strchr(tmp,'\n')) *strchr(tmp,'\n')=0;
      if(tailf[i].opt & TAILO_EVAL) {//eval
-      if(tailf[i].args) { //only format magic evaled file lines if they have args.
+      if(tailf[i].args) { //only format magic evaled file lines if they have args. //why?
        tmp2=format_magic(fd,tailf[i].to,segnick,tmp,tailf[i].args);
       } else {
-       tmp2=strdup(tmp);
-       if(!tmp2) {
-        perror("ZOMG malloc error in eval section!!!");
-        return;
-       }
+       if(!(tmp2=strdup(tmp))) exit(2);
       }
       message_handler(fd,tailf[i].to,segnick,tmp2,0);
       free(tmp2);
@@ -398,7 +409,7 @@ struct alias *getkey_h(char *key) {
 }
 
 //this seems too complicated.
-void setkey_h(char *key,char *value) {
+int setkey_h(char *key,char *value) {
  unsigned short h=hash(key);
  struct alias *tmp;
  int i;
@@ -410,7 +421,7 @@ void setkey_h(char *key,char *value) {
  if(!hashtable[h]) { //empty bucket!
   //add this to the list of used buckets so we can easily
   //use that list later for stuff.
-  hashtable[h]=malloc(sizeof(struct hitem));
+  if(!(hashtable[h]=malloc(sizeof(struct hitem)))) return 1; 
   hashtable[h]->ll=0;
   //we now have a valid hashtable entry and a NULL ll in it.
   //don't bother with the new ll entry yet...
@@ -418,30 +429,27 @@ void setkey_h(char *key,char *value) {
  if((tmp=leetgetalias(hashtable[h]->ll,key)) != NULL) {
   //we found this alias in the ll. now to replace the value
   free(tmp->target);
-  tmp->target=strdup(value);
-  return;
+  if(!(tmp->target=strdup(value))) return 2;
+  return 0;
  }
- //else {
-  if(hashtable[h]->ll == NULL) {
-   hashtable[h]->ll=malloc(sizeof(struct alias));
-   hashtable[h]->ll->next=0;
-   hashtable[h]->ll->prev=0;
-   hashtable[h]->ll->original=strdup(key);
-   hashtable[h]->ll->target=strdup(value);
-  } else {
-   //go to the end and add another entry to the ll.
-   for(tmp=hashtable[h]->ll;tmp->next;tmp=tmp->next);
-   tmp->next=malloc(sizeof(struct alias));
-   tmp->next->prev=tmp;
-   tmp=tmp->next;
-   tmp->original=strdup(key);
-   tmp->target=strdup(value);
-   tmp->next=0;
-  }
- //}
+ if(hashtable[h]->ll == NULL) {
+  if(!(hashtable[h]->ll=malloc(sizeof(struct alias)))) return 3;
+  hashtable[h]->ll->next=0;
+  hashtable[h]->ll->prev=0;
+  if(!(hashtable[h]->ll->original=strdup(key))) return 4;
+  if(!(hashtable[h]->ll->target=strdup(value))) return 5;
+ } else {
+  //go to the end and add another entry to the ll.
+  for(tmp=hashtable[h]->ll;tmp->next;tmp=tmp->next);
+  if(!(tmp->next=malloc(sizeof(struct alias)))) return 6;
+  tmp->next->prev=tmp;
+  tmp=tmp->next;
+  if(!(tmp->original=strdup(key))) return 7;
+  if(!(tmp->target=strdup(value))) return 8;
+  tmp->next=0;
+ }
+ return 0;
 }
-
-//#endif ///////////////////////// HASH TABLE SHIT /////////////////////////////////
 
 void c_aliases_h(int fd,char *from,char *line) {
  char tmp[512];
@@ -677,17 +685,10 @@ void c_leetappend(int fd,char *from,char *msg) {
  append_file(fd,from,file,line,nl);
 }
 
-char *tailmode_to_txt(int mode) {//this needs to be updated.
- if(mode & TAILO_RAW) return "raw";
- if(mode & TAILO_MSG) return "msg";
- if(mode & TAILO_EVAL) return "eval";
- return "undef";
-}
-
 void c_tails(int fd,char *from) {
  int i;
  int l;
- char *tmp;
+ char *tmp,*x;
  //privmsg(fd,from,"filename@filepos --msg|raw-> IRCdestination");
  for(i=0;i<MAXTAILS;i++) {
   if(tailf[i].fp) {
@@ -697,7 +698,9 @@ void c_tails(int fd,char *from) {
     mywrite(fd,"QUIT :malloc error 8\r\n");
     return;
    }
-   snprintf(tmp,l,"%s [i:%d] @ %ld (%d) --[%s(%02x)]--> %s",tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,tailmode_to_txt(tailf[i].opt),tailf[i].opt,tailf[i].to);
+   x=tailmode_to_txt(tailf[i].opt);
+   snprintf(tmp,l,"%s [i:%d] @ %ld (%d) --[%s(%02x)]--> %s",tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to);
+   free(x);
    privmsg(fd,from,tmp);
    free(tmp);
   }
@@ -748,11 +751,6 @@ void c_leetsetout(int fd,char *from,char *msg) {
 
 void c_linelimit(int fd,char *from,char *msg) {
  char tmp[256];
- //struct itimerspec settime;
- //settime.it_interval.tv_sec=0;
- //settime.it_interval.tv_nsec=10;
- //settime.it_value.tv_nsec=0;
- //settime.it_value.tv_nsec=10;
  if(!msg) {
   snprintf(tmp,255,"current spam line limit: %d (debug: %d)",line_limit,debug);
   privmsg(fd,from,tmp);
@@ -765,17 +763,6 @@ void c_linelimit(int fd,char *from,char *msg) {
   } else {
    privmsg(fd,from,"please set the limit to > 1... oi. (btw, debug has been flipped)");
    debug^=1;
-//   if(debug) {
-//    if(timer_create(CLOCK_REALTIME,SIGEV_NONE,&timer) == -1) {
-//     privmsg(fd,from,(debug=0,"error making debug timer. shit."));
-//    }
-//    if(timer_settime(timer,0,&settime,&settime) == -1) {
-//     privmsg(fd,from,(debug=0,"error setting debug timer. shit."));     
-//    }
-//   }
-//   else if(timer_delete(timer) == -1) {
-//    privmsg(fd,from,"error deleting timer. shit.");
-//   }
   }
  }
 }
@@ -882,6 +869,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  else if(!strncmp(msg,"!aliases",8) && (!msg[8] || msg[8] == ' ')) {
   c_aliases_h(fd,from,*(msg+8)?msg+9:0);
  }
+
  else if(redones < 5) {
   debug_time(fd,from,"checking aliases...");
   //CONVERT

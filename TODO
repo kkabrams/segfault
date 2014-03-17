@@ -1,7 +1,10 @@
  o convert aliases from a linked list to a hash-table with linked lists in
    each bucket. so O(whatever), much fast, many speed, wow.
+ o fix the ugly stuff that is casted to void in returns.
+
+--- ^^^ done ^^^ ---
+
  o add stuff to libirc to buffer stuff being written to the socket so that
    it can put a speed limit on that kind of stuff. (but why would the bot
    get an fd from the runit function?)
- o fix the ugly stuff that is casted to void in returns.
  o make the source code smaller or something.
