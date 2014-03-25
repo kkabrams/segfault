@@ -58,7 +58,6 @@ timer_t timer;
 int lines_sent;
 unsigned long oldtime;
 
-
 struct tail {
  FILE *fp;
  char *file;
@@ -82,9 +81,12 @@ void c_untail(int fd,char *from, char *file);
 
 
 void mywrite(int fd,char *b) {
+ int r;
  if(!b) return;
  if(fd<0) return;
- write(fd,b,strlen(b));
+ r=write(fd,b,strlen(b));
+ if(r == -1) exit(1);
+ if(r != strlen(b)) exit(2);
  lines_sent++;
 }
 
@@ -171,6 +173,13 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
  output[sz]=0;
  free(fmt);
  return output;
+}
+
+void eofd(int fd) {
+ char b;
+ if(lseek(fd,0,SEEK_END) == -1) {
+  while(read(fd,&b,1) > 0);//this is used on named pipes usually.
+ }
 }
 
 void eofp(FILE *fp) {
@@ -283,7 +292,9 @@ void file_tail(int fd,char *from,char *file,char *args,char opt) {
   privmsg(fd,from,tmp);
  } else {
   fcntl(fileno(tailf[i].fp),F_SETFL,O_NONBLOCK);
-  if(!(opt & TAILO_BEGIN)) fseek(tailf[i].fp,0,SEEK_END);
+  if(!(opt & TAILO_BEGIN)) {
+   eofp(tailf[i].fp);
+  }
   tailf[i].to=malloc(strlen(from)+1);
   if(!tailf[i].to) {
    mywrite(fd,"QUIT :malloc error 3!!!\r\n");
@@ -568,7 +579,9 @@ void c_leetuntail(int fd,char *from,char *line) {
     if(tailf[i].fp && !strcmp(tailf[i].file,file)) {
      //c_untail(fd,tailf[i].to,file);
      eofp(tailf[i].fp);
-     fclose(tailf[i].fp);
+     if(fclose(tailf[i].fp) == -1) {
+      privmsg(fd,from,"well, shit. fclose failed somehow.");
+     }
      tailf[i].fp=0;
      free(tailf[i].to);
      free(tailf[i].file);
@@ -583,7 +596,9 @@ void c_leetuntail(int fd,char *from,char *line) {
  } else {
   frmN=atoi(frm);
   if(frmN < MAXTAILS && tailf[frmN].fp) {
-   fclose(tailf[frmN].fp);
+   if(fclose(tailf[frmN].fp) == -1) {
+    privmsg(fd,from,"well shit. fclose failed. #2");
+   }
    tailf[frmN].fp=0;
    free(tailf[frmN].to);
    free(tailf[frmN].file);
@@ -613,7 +628,9 @@ void c_untail(int fd,char *from, char *file) {
  for(i=0;i<MAXTAILS;i++) {
   if(tailf[i].fp) {
    if(!strcmp(from,tailf[i].to) && !strcmp(file,tailf[i].file)) {
-    fclose(tailf[i].fp);
+    if(fclose(tailf[i].fp) == -1) {
+     privmsg(fd,from,"fclose failed. #3");
+    }
     tailf[i].fp=0;
     free(tailf[i].to);
     free(tailf[i].file);
@@ -641,6 +658,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   privmsg(fd,from,strerror(errno));
   return 0;
  }
+
  if(!(fp=fdopen(fdd,"a"))) {
   snprintf(tmp,sizeof(tmp)-1,"Couldn't fdopen file (%s) fd:%d for appending.",file,fdd);
   privmsg(fd,from,tmp);
@@ -648,18 +666,17 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   return 0;
  }
  fcntl(fileno(fp),F_SETFL,O_NONBLOCK);
- fseek(fp,0,SEEK_END);//is this right for named pipes?
- //if(fprintf(fp,"%s%s",line,(char *)
- //                     ( nl != 0 ?
- //                       &nl :
- //                       (unsigned short *)"" )
-  if(fprintf(fp,"%s\n",line
-           ) < 0) {
-  privmsg(fd,from,"error writing to file.");
-  return 0;
- }
- fflush(fp);//???
- fflush(fp);
+ eofp(fp);
+/* mywrite(fileno(fp),line);
+ mywrite(fileno(fp),"\n");*/
+ fprintf(fp,"%s\n",line);
+/*
+ fcntl(fdd,F_SETFL,O_NONBLOCK);
+ eofd(fdd);
+ mywrite(fdd,line);
+ mywrite(fdd,"\n");
+*/
+// close(fdd);
  fclose(fp);
  return 1;
 }

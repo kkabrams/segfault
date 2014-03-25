@@ -7,21 +7,19 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 
-//#define DEBUG //comment me out to disable.
+//#define DEBUG "epoch" //nick or channel to send debug info to.
 #define CHUNK 16
 
 static int serverConnect(char *serv,char *port) {
  struct addrinfo hints, *servinfo, *p;
  int rv;
+ int fd=0;
  memset(&hints,0,sizeof hints);
  hints.ai_family=AF_INET;
  hints.ai_socktype=SOCK_STREAM;
-
- int fd=0;
-
- fd=socket(PF_INET,SOCK_STREAM,IPPROTO_TCP);
- if(fd < 0) {
+ if((fd=socket(PF_INET,SOCK_STREAM,IPPROTO_TCP)) < 0) {
   perror("socket");
   return fd;
  }
@@ -36,18 +34,7 @@ static int serverConnect(char *serv,char *port) {
   }
   break;
  }
- if(!p) {
-  return 0;
- }
- return fd;
-}
-
-static int haschar(char *s,char c) {
- int i;
- for(i=0;s[i];i++) {
-  if(s[i]==c) return 1;
- }
- return 0;
+ return p?fd:0;
 }
 
 int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
@@ -55,18 +42,13 @@ int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
  fd_set master;
  fd_set readfs;
  struct timeval timeout;
- int fdmax;
- int n;
- int s;
- int i;
- int good=0;
+ int fdmax,n,s,i;
  char *backlog=malloc(CHUNK+1);
- if(!backlog) return 252;
- char *t;
- char *line=0;
+ char *t,*line=0;
  int blsize=CHUNK;
  int bllen=0;
  char buffer[CHUNK];//THIS IS *NOT* NULL TERMINATED.
+ if(!backlog) return 252;
  FD_ZERO(&master);
  FD_ZERO(&readfs);
  FD_SET(fd,&master);
@@ -76,26 +58,22 @@ int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
  memset(buffer,0,CHUNK);
  if(fd) {
   int done=0;
-//  printf("starting main loop.\n");
   while(!done) {
    extra_handler(fd);
    readfs=master;
    timeout.tv_sec=0;
    timeout.tv_usec=1000;
-//   printf("trying select. %d\n",time(0));
    if( select(fdmax+1,&readfs,0,0,&timeout) == -1 ) {
     printf("\n!!!It is crashing here!!!\n\n");
     perror("select");
     return 1;
    }
    if(FD_ISSET(fd,&readfs)) {
-//    printf("An fd is set!!!\n");
     if((n=recv(fd,buffer,CHUNK,0)) <= 0) {//read CHUNK bytes
      fprintf(stderr,"recv: %d\n",n);
      perror("recv");
      return 2;
     } else {
-//     printf("%d bytes read\n",n);
      buffer[n]=0;//deff right.
      if(bllen+n >= blsize) {//this is probably off...
       blsize+=n;
@@ -111,28 +89,22 @@ int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
      }
      memcpy(backlog+bllen,buffer,n);
      bllen+=n;
-//     write(1,backlog,bllen);
-//     write(1,"\n",1);
      for(i=0,s=0;i<bllen;i++) {
       if(backlog[i]=='\n') {
-       line=malloc(i-s+3);//on linux it crashes without the +1
+       line=malloc(i-s+3);//on linux it crashes without the +1 +3? weird. when did I do that?
        if(!line) {
         printf("ANOTHER malloc error!\n");
         exit(254);
        }
        memcpy(line,backlog+s,i-s+2);
-//       printf("NEWLINE!\n");
        line[i-s+1]=0;//gotta null terminate this. line_handler expects it.
-//       printf("libirc: !!! %s !!!\n",line);
        s=i+1;//the character after the newline.
        if(!strncmp(line,"PING",4)) {
-        //write(fd,"PONG ",5);
-        //write(fd,line+6,strlen(line)-6);
-        fprintf(fp,"PING %s\r\n",line+6);//a whole FILE * and fdopen JUST for this??? oi...
+        fprintf(fp,"PONG %s\r\n",line+6);//a whole FILE * and fdopen JUST for this??? oy...
         fflush(fp);
 #ifdef DEBUG
         printf("%s\nPONG %s\n",line,line+6);
-        write(fd,"PRIVMSG epoch :PONG! w00t!\r\n",28);
+        write(fd,"PRIVMSG %s :PONG! w00t!\r\n",DEBUG,28);
 #endif
        } else if(!strncmp(line,"ERROR",5)) {
 #ifdef DEBUG
@@ -157,9 +129,8 @@ int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
     }
    }
   }
- } else {
-  return 0;
  }
+ return 0;
 }
 
 //:hack.thebackupbox.net 433 * sysbot :Nickname is already in use.

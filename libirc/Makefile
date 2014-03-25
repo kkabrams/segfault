@@ -9,3 +9,6 @@ $(TARGET):
 
 clean:
 	rm -f libirc.so
+
+install:
+	cp $(TARGET) /usr/local/lib/$(TARGET)
