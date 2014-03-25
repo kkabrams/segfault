@@ -1,0 +1,3 @@
+#!/bin/bash
+PORT=$(sockstat -n | grep segfault | tr -s ' ' | cut -d. -f5 | cut '-d ' -f1)
+tcpdump -q -s0 -nXXi lo0 port $PORT

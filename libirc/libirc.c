@@ -100,8 +100,12 @@ int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
        line[i-s+1]=0;//gotta null terminate this. line_handler expects it.
        s=i+1;//the character after the newline.
        if(!strncmp(line,"PING",4)) {
-        fprintf(fp,"PONG %s\r\n",line+6);//a whole FILE * and fdopen JUST for this??? oy...
-        fflush(fp);
+        t=malloc(strlen(line));
+        strcpy(t,"PONG ");
+        strcat(t,line+6);
+	write(fd,t,strlen(t));
+        //fprintf(fp,"PONG %s",line+6);//a whole FILE * and fdopen JUST for this??? oy...
+        //fflush(fp);
 #ifdef DEBUG
         printf("%s\nPONG %s\n",line,line+6);
         write(fd,"PRIVMSG %s :PONG! w00t!\r\n",DEBUG,28);

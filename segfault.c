@@ -705,10 +705,12 @@ void c_leetappend(int fd,char *from,char *msg) {
 void c_tails(int fd,char *from) {
  int i;
  int l;
+ int at_least_one=0;
  char *tmp,*x;
  //privmsg(fd,from,"filename@filepos --msg|raw-> IRCdestination");
  for(i=0;i<MAXTAILS;i++) {
   if(tailf[i].fp) {
+   at_least_one=1;
    l=(strlen(tailf[i].file) + strlen(tailf[i].to) + 50);//??? hack. fix it.
    tmp=malloc(l);
    if(!tmp) {
@@ -721,6 +723,9 @@ void c_tails(int fd,char *from) {
    privmsg(fd,from,tmp);
    free(tmp);
   }
+ }
+ if(!at_least_one) {
+  privmsg(fd,from,"I don't have any tails. :(");
  }
 }
 
