@@ -7,17 +7,17 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
-#include <irc.h> //epoch's libirc. should be included with segfault.
+#include "libirc/irc.h" //epoch's libirc. should be included with segfault.
 
 //might want to change some of these.
-#define SERVER			"192.168.0.2"
+#define SERVER			"127.0.0.1"
 #define PORT			"6667"
 #define NICK			"SegFault" //override with argv[0]
 #define LINE_LIMIT		line_limit
 #define LINES_SENT_LIMIT	1
 #define LINELEN			400
-#define RAWLOG			"/home/segfault/files/rawlog"
-#define LOG			"/home/segfault/files/log"
+#define RAWLOG			"/home/epoch/segfault/files/rawlog"
+#define LOG			"/home/epoch/segfault/files/log"
 #define MAXTAILS		400 //just to have it more than the system default.
 #define BS 502
 #define TSIZE 65536             //size of hashtable. 65k isn't bad, right?
@@ -101,6 +101,14 @@ void ircmode(int fd,char *channel,char *mode,char *nick) {
  write(fd,hrm,strlen(hrm));
  free(hrm); 
 }
+
+/*#ifndef strndup
+char *strndup(char *s,int l) {
+ char *r=strdup(s);
+ r[l]=0;
+ return r;
+}
+#endif*/
 
 void privmsg(int fd,char *who,char *msg) {
  int i=0;
@@ -467,7 +475,7 @@ void c_aliases_h(int fd,char *from,char *line) {
  struct alias *m;
  int i,j=0,k=0;
  if(!line){
-  privmsg(fd,from,"usage: !aliases_h [search-term]");
+  privmsg(fd,from,"usage: !aliases [search-term]");
   return;
  }
  for(i=0;i<htkl;i++) {
@@ -555,6 +563,12 @@ void c_kill(int fd,char *from,char *line) {
  } else {
   privmsg(fd,from,"pid or sig is 0. something is odd.");
  }
+}
+
+void c_pid(int fd,char *from) {
+ char tmp[512];
+ snprintf(tmp,sizeof(tmp)-1,"pid: %d",getpid());
+ privmsg(fd,from,tmp);
 }
 
 void c_id(int fd,char *from) {
@@ -808,6 +822,10 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   append_file(fd,"raw",LOG,msg,'\n');
   debug_time(fd,from,"finished writing to log.");
  }
+ if(!strncmp(msg,segnick,strlen(segnick)) && msg[strlen(segnick)]) {
+  msg+=strlen(segnick);
+  msg[0]='!';
+ }
  if(*msg != '!') {
   return;
  }
@@ -879,6 +897,9 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  else if(!strncmp(msg,"!id",3) && !msg[3]) {
   c_id(fd,from);
  }
+ else if(!strncmp(msg,"!pid",4) && !msg[4]) {
+  c_pid(fd,from);
+ }
  else if(!strncmp(msg,"!kill ",6)) {
   c_kill(fd,from,msg+6);
  }
@@ -894,7 +915,6 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
 
  else if(redones < 5) {
   debug_time(fd,from,"checking aliases...");
-  //CONVERT
   if((m=getalias_h(msg)) != NULL) {
    sz=(strlen(msg)-strlen(m->original)+strlen(m->target)+1);
    redo=format_magic(fd,from,nick,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1));
