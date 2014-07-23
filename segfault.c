@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
+#include <pwd.h>
 #include "libirc/irc.h" //epoch's libirc. should be included with segfault.
 
 //might want to change some of these.
@@ -16,8 +17,8 @@
 #define LINE_LIMIT		line_limit
 #define LINES_SENT_LIMIT	1
 #define LINELEN			400
-#define RAWLOG			"/home/epoch/segfault/files/rawlog"
-#define LOG			"/home/epoch/segfault/files/log"
+#define RAWLOG			"/home/segfault/files/rawlog"
+#define LOG			"/home/segfault/files/log"
 #define MAXTAILS		400 //just to have it more than the system default.
 #define BS 502
 #define TSIZE 65536             //size of hashtable. 65k isn't bad, right?
@@ -75,6 +76,7 @@ struct alias {
  struct alias *next;
 };
 
+char *shitlist[] = { 0 };
 
 void message_handler(int fd,char *from,char *nick,char *msg,int redones);
 void c_untail(int fd,char *from, char *file);
@@ -371,7 +373,7 @@ void c_changetail(int fd,char *from,char *line) {
 void startup_stuff(int fd) {
  mywrite(fd,"OPER g0d WAFFLEIRON\r\n");
  mywrite(fd,"JOIN #cmd\r\n");
- c_leettail(fd,"#cmd","22./scripts/startup");
+ c_leettail(fd,"#cmd","22/home/segfault/scripts/startup");
 }
 
 void debug_time(int fd,char *from,char *msg) {
@@ -602,8 +604,8 @@ void c_leetuntail(int fd,char *from,char *line) {
      return;
     }
    }
-   snprintf(tmp,sizeof(tmp)-1,"%s from %s not being tailed.",file,frm);
-   privmsg(fd,from,tmp);
+   //snprintf(tmp,sizeof(tmp)-1,"%s from %s not being tailed.",file,frm);
+   //privmsg(fd,from,tmp);
   } else {
    c_untail(fd,frm,file);
   }
@@ -667,9 +669,8 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
  if(line == 0) return mywrite(fd,"QUIT :line == 0 in append_file\r\n"),-1;
  fdd=open(file,O_WRONLY|O_NONBLOCK|O_APPEND|O_CREAT,0640);//HAVE to open named pipes as nonblocking.
  if(fdd == -1) {
-  snprintf(tmp,sizeof(tmp)-1,"Couldn't open file (%s) fd:%d for a LOT of modes... figure out out.",file,fdd);
+  snprintf(tmp,sizeof(tmp)-1,"%s: (%s) fd:%d",strerror(errno),file,fdd);
   privmsg(fd,from,tmp);
-  privmsg(fd,from,strerror(errno));
   return 0;
  }
 
@@ -814,6 +815,11 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  char tmp[512];
  int sz;
  //debug_time(fd,from);
+ for(sz=0;shitlist[sz];sz++) {
+  if(!strcmp(shitlist[sz],nick)) {
+   return;
+  }
+ }
  if(redirect_to_fd != -1) {
   fd=redirect_to_fd;
  }
@@ -822,9 +828,13 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   append_file(fd,"raw",LOG,msg,'\n');
   debug_time(fd,from,"finished writing to log.");
  }
- if(!strncmp(msg,segnick,strlen(segnick)) && msg[strlen(segnick)]) {
-  msg+=strlen(segnick);
-  msg[0]='!';
+ if(!strncmp(msg,segnick,strlen(segnick))) {
+  if(msg[strlen(segnick)] == ',' || msg[strlen(segnick)] == ':') {
+   if(msg[strlen(segnick)+1] == ' ') {
+    msg+=strlen(segnick)+1;
+    msg[0]='!';
+   }
+  }
  }
  if(*msg != '!') {
   return;
@@ -1003,6 +1013,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
 
 int main(int argc,char *argv[]) {
  int fd;
+ struct passwd *pwd;
  int c;
  redirect_to_fd=-1;
  debug=0;
@@ -1016,6 +1027,13 @@ int main(int argc,char *argv[]) {
  inittable();
  segnick=strdup(NICK);
  printf("starting segfault...\n");
+ if(!getuid() || !geteuid()) {
+  pwd=getpwnam("segfault");
+  if(!pwd) { printf("I'm running with euid or uid of 0 and I can't find myself."); return 0; }
+  setgroups(0,0);
+  setgid(pwd->pw_gid);
+  setuid(pwd->pw_uid);
+ }
  for(c=0;c<MAXTAILS;c++) tailf[c].fp=0;
  fd=ircConnect(SERVER,PORT,argc>1?argv[1]:"SegFault","segfault segfault segfault :segfault");
  startup_stuff(fd);
