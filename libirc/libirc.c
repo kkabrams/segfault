@@ -1,13 +1,13 @@
 #include <sys/time.h>
 #include <string.h>
 #include <stdlib.h>
-#include <sys/select.h>
 #include <stdio.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <sys/select.h>
 
 //#define DEBUG "epoch" //nick or channel to send debug info to.
 #define CHUNK 16

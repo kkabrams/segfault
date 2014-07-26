@@ -4,4 +4,4 @@ kill `pgrep -P 1 -f "tail -f /home/segfault/files/cmd_in"`
 mkdir -p /home/segfault/files
 mkfifo /home/segfault/files/cmd_in
 mkfifo /home/segfault/files/cmd_out
-exec segfault tail -f /home/segfault/files/cmd_in | su -l segfault 2>&1 > /home/segfault/files/cmd_out 2>&1
+exec setuidgid segfault tail -f /home/segfault/files/cmd_in | su -l segfault 2>&1 > /home/segfault/files/cmd_out 2>&1

@@ -11,14 +11,15 @@
 #include "libirc/irc.h" //epoch's libirc. should be included with segfault.
 
 //might want to change some of these.
+#define LOCKED_DOWN		0
 #define SERVER			"127.0.0.1"
 #define PORT			"6667"
 #define NICK			"SegFault" //override with argv[0]
-#define LINE_LIMIT		line_limit
+#define MYUSER			"segfault"
 #define LINES_SENT_LIMIT	1
 #define LINELEN			400
-#define RAWLOG			"/home/segfault/files/rawlog"
-#define LOG			"/home/segfault/files/log"
+#define RAWLOG			"./files/rawlog"
+#define LOG			"./files/log"
 #define MAXTAILS		400 //just to have it more than the system default.
 #define BS 502
 #define TSIZE 65536             //size of hashtable. 65k isn't bad, right?
@@ -50,7 +51,7 @@ char *tailmode_to_txt(int mode) {
 }
 
 int start_time;
-char *segnick;
+char *mynick;
 char *redo;
 int redirect_to_fd;
 int line_limit;
@@ -81,7 +82,6 @@ char *shitlist[] = { 0 };
 void message_handler(int fd,char *from,char *nick,char *msg,int redones);
 void c_untail(int fd,char *from, char *file);
 
-
 void mywrite(int fd,char *b) {
  int r;
  if(!b) return;
@@ -104,13 +104,13 @@ void ircmode(int fd,char *channel,char *mode,char *nick) {
  free(hrm); 
 }
 
-/*#ifndef strndup
+/*// just in case your system doesn't have strndup
 char *strndup(char *s,int l) {
  char *r=strdup(s);
  r[l]=0;
  return r;
 }
-#endif*/
+*/
 
 void privmsg(int fd,char *who,char *msg) {
  int i=0;
@@ -159,7 +159,7 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
      case 'u':case 'f':case 's':case 'm'://here.
       args[c]=((fmt[i]=='u')?nick:
                ((fmt[i]=='f')?from:
-                ((fmt[i]=='m')?segnick://and here.
+                ((fmt[i]=='m')?mynick://and here.
                  arg
               )));
       fmt[i-1]=0;
@@ -185,6 +185,7 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
  return output;
 }
 
+//these two functions might be fun to try overloading.
 void eofd(int fd) {
  char b;
  if(lseek(fd,0,SEEK_END) == -1) {
@@ -239,11 +240,11 @@ void extra_handler(int fd) {
      if(strchr(tmp,'\n')) *strchr(tmp,'\n')=0;
      if(tailf[i].opt & TAILO_EVAL) {//eval
       if(tailf[i].args) { //only format magic evaled file lines if they have args. //why?
-       tmp2=format_magic(fd,tailf[i].to,segnick,tmp,tailf[i].args);
+       tmp2=format_magic(fd,tailf[i].to,mynick,tmp,tailf[i].args);
       } else {
        if(!(tmp2=strdup(tmp))) exit(2);
       }
-      message_handler(fd,tailf[i].to,segnick,tmp2,0);
+      message_handler(fd,tailf[i].to,mynick,tmp2,0);
       free(tmp2);
      }
      if(tailf[i].opt & TAILO_RAW) {//raw
@@ -255,7 +256,7 @@ void extra_handler(int fd) {
      if(tailf[i].opt & TAILO_MSG) {//just msg the lines.
       privmsg(fd,tailf[i].to,tmp);
      }
-     if(tailf[i].lines >= LINE_LIMIT && (tailf[i].opt & TAILO_SPAM)) {
+     if(tailf[i].lines >= line_limit && line_limit > 0 && (tailf[i].opt & TAILO_SPAM)) {
       tailf[i].lines=-1; //lock it.
       privmsg(fd,tailf[i].to,"--more--");
      }
@@ -332,7 +333,7 @@ void file_tail(int fd,char *from,char *file,char *args,char opt) {
 
 void c_botup(int fd,char *from) {
  char tmp[256];
- snprintf(tmp,sizeof(tmp)-1,"botup: %lu",time(0)-start_time);
+ snprintf(tmp,sizeof(tmp)-1,"botup: %lu",(unsigned long int)time(0)-start_time);
  privmsg(fd,from,tmp);
 }
 
@@ -373,13 +374,13 @@ void c_changetail(int fd,char *from,char *line) {
 void startup_stuff(int fd) {
  mywrite(fd,"OPER g0d WAFFLEIRON\r\n");
  mywrite(fd,"JOIN #cmd\r\n");
- c_leettail(fd,"#cmd","22/home/segfault/scripts/startup");
+ c_leettail(fd,"#cmd","22./scripts/startup");
 }
 
 void debug_time(int fd,char *from,char *msg) {
  char tmp[100];
  if(debug) {
-  snprintf(tmp,99,"%lu %s",time(0),msg?msg:"(no message)");//time() returns time_t which on BSD is a long.
+  snprintf(tmp,99,"%lu %s",(unsigned long int)time(0),msg?msg:"(no message)");//time() returns time_t which on BSD is a long.
   privmsg(fd,from,tmp);
  }
 }
@@ -793,12 +794,12 @@ void c_linelimit(int fd,char *from,char *msg) {
   privmsg(fd,from,tmp);
  }
  else {
-  if(atoi(msg) > 1) {
+  if(atoi(msg) >= 0) {
    line_limit=atoi(msg);
    snprintf(tmp,255,"spam line limit set to: %d",line_limit);
    privmsg(fd,from,tmp);
   } else {
-   privmsg(fd,from,"please set the limit to > 1... oi. (btw, debug has been flipped)");
+   privmsg(fd,from,"hidden feature! negative line limit flips debug bit.");
    debug^=1;
   }
  }
@@ -809,15 +810,29 @@ void c_resetout(int fd,char *from) {
  privmsg(fd,from,"output reset");
 }
 
+/* maybe... that message hander is ugly.
+struct builtin {
+ char *cmd;
+ void (*func)();
+};
+
+struct builtin[] = {
+ "resetout", c_resetout
+};
+*/
+
 void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  struct alias *m;
  char *tmp2;
  char tmp[512];
  int sz;
  //debug_time(fd,from);
- for(sz=0;shitlist[sz];sz++) {
-  if(!strcmp(shitlist[sz],nick)) {
-   return;
+ if(strcmp(nick,mynick)) {
+  if(LOCKED_DOWN) return;
+  for(sz=0;shitlist[sz];sz++) {
+   if(!strcmp(shitlist[sz],nick)) {
+    return;
+   }
   }
  }
  if(redirect_to_fd != -1) {
@@ -828,10 +843,10 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   append_file(fd,"raw",LOG,msg,'\n');
   debug_time(fd,from,"finished writing to log.");
  }
- if(!strncmp(msg,segnick,strlen(segnick))) {
-  if(msg[strlen(segnick)] == ',' || msg[strlen(segnick)] == ':') {
-   if(msg[strlen(segnick)+1] == ' ') {
-    msg+=strlen(segnick)+1;
+ if(!strncmp(msg,mynick,strlen(mynick))) {
+  if(msg[strlen(mynick)] == ',' || msg[strlen(mynick)] == ':') {
+   if(msg[strlen(mynick)+1] == ' ') {
+    msg+=strlen(mynick)+1;
     msg[0]='!';
    }
   }
@@ -849,7 +864,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   c_leetsetout(fd,from,msg+12);
  }
  else if(!strncmp(msg,"!whoareyou",10) && !msg[10]) {
-  privmsg(fd,from,segnick);
+  privmsg(fd,from,mynick);
  }
  else if(!strncmp(msg,"!whoami",7) && !msg[7]) {
   privmsg(fd,from,nick);
@@ -1003,9 +1018,9 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
 //:Ishikawa-!~epoch@localhost NICK :checking
   if(!strcmp(s,"NICK")) {
-   if(!strcmp(nick,segnick)) {
-    free(segnick);
-    segnick=strdup(t+1);
+   if(!strcmp(nick,mynick)) {
+    free(mynick);
+    mynick=strdup(t+1);
    }
   }
  }
@@ -1025,17 +1040,18 @@ int main(int argc,char *argv[]) {
  htkl=0;
  redo=0;
  inittable();
- segnick=strdup(NICK);
+ mynick=strdup(NICK);
  printf("starting segfault...\n");
  if(!getuid() || !geteuid()) {
-  pwd=getpwnam("segfault");
+  pwd=getpwnam(MYUSER);
   if(!pwd) { printf("I'm running with euid or uid of 0 and I can't find myself."); return 0; }
   setgroups(0,0);
   setgid(pwd->pw_gid);
   setuid(pwd->pw_uid);
  }
  for(c=0;c<MAXTAILS;c++) tailf[c].fp=0;
- fd=ircConnect(SERVER,PORT,argc>1?argv[1]:"SegFault","segfault segfault segfault :segfault");
+ fd=ircConnect(SERVER,PORT,argc>1?argv[1]:NICK,"segfault segfault segfault :segfault");
+ chdir(pwd->pw_dir);
  startup_stuff(fd);
  return runit(fd,line_handler,extra_handler);
 }
