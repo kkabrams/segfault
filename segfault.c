@@ -11,7 +11,6 @@
 #include "libirc/irc.h" //epoch's libirc. should be included with segfault.
 
 //might want to change some of these.
-#define LOCKED_DOWN		0
 #define SERVER			"127.0.0.1"
 #define PORT			"6667"
 #define NICK			"SegFault" //override with argv[0]
@@ -50,6 +49,7 @@ char *tailmode_to_txt(int mode) {
  return m;
 }
 
+char locked_down;
 int start_time;
 char *mynick;
 char *redo;
@@ -256,7 +256,7 @@ void extra_handler(int fd) {
      if(tailf[i].opt & TAILO_MSG) {//just msg the lines.
       privmsg(fd,tailf[i].to,tmp);
      }
-     if(tailf[i].lines >= line_limit && line_limit > 0 && (tailf[i].opt & TAILO_SPAM)) {
+     if(tailf[i].lines >= line_limit && (tailf[i].opt & TAILO_SPAM)) {
       tailf[i].lines=-1; //lock it.
       privmsg(fd,tailf[i].to,"--more--");
      }
@@ -389,7 +389,7 @@ struct alias *leetgetalias(struct alias *start,char *msg) {
  struct alias *m;
  if(!msg) return NULL;
  if(!start) return NULL;
- for(m=start;m;m=m->next) {//optimize this. hash table?
+ for(m=start;m;m=m->next) {
   if(!strncmp(msg,m->original,strlen(m->original)) && (msg[strlen(m->original)]==' ' || msg[strlen(m->original)] == 0)) {//this allows !c to get called when using !c2 if !c2 is defined after !c. >_>
    return m;
   }
@@ -405,7 +405,7 @@ unsigned short hash(char *v) {//maybe use a seeded rand()? :) Thanks FreeArtMan
 }
 
 struct hitem {//with a stick
- struct alias *ll;//run through this linked list if it isn't the right one.
+ struct alias *ll;
 };
 
 struct hitem **hashtable;
@@ -500,7 +500,11 @@ void c_aliases_h(int fd,char *from,char *line) {
 //CONVERT //this is the last one that needs to be converted to
 // be used with the hashtable
 /*
-void c_rmalias(int fd,char *from,char *line) {
+void c_rmalias_h(int fd,char *from,char *line) {
+
+}
+
+void c_leetrmalias(int fd,char *from,char *line) {
  struct alias *m;
  for(m=a_start;m;m=m->next) {
   if(!strcmp(line,m->original)) {
@@ -828,7 +832,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  int sz;
  //debug_time(fd,from);
  if(strcmp(nick,mynick)) {
-  if(LOCKED_DOWN) return;
+  if(locked_down) return;
   for(sz=0;shitlist[sz];sz++) {
    if(!strcmp(shitlist[sz],nick)) {
     return;
@@ -843,6 +847,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   append_file(fd,"raw",LOG,msg,'\n');
   debug_time(fd,from,"finished writing to log.");
  }
+ //if(!strchr(msg,'*')-msg)
  if(!strncmp(msg,mynick,strlen(mynick))) {
   if(msg[strlen(mynick)] == ',' || msg[strlen(mynick)] == ':') {
    if(msg[strlen(mynick)+1] == ' ') {
@@ -953,8 +958,8 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   snprintf(tmp,sizeof(tmp),"unknown command: %s",msg);
   privmsg(fd,from,tmp);
  }
- if(redones >=5) {
-  privmsg(fd,from,"too much recursion.");
+ if(redones >5) {
+  privmsg(fd,from,"I don't know if I'll ever get out of this alias hole you're telling me to dig. Fuck this.");
  }
 }
 
@@ -1032,6 +1037,7 @@ int main(int argc,char *argv[]) {
  int c;
  redirect_to_fd=-1;
  debug=0;
+ locked_down=(argc>2);
  lines_sent=0;
  line_limit=25;
  recording=0;
@@ -1040,7 +1046,7 @@ int main(int argc,char *argv[]) {
  htkl=0;
  redo=0;
  inittable();
- mynick=strdup(NICK);
+ mynick=strdup(argc>1?argv[1]:NICK);
  printf("starting segfault...\n");
  if(!getuid() || !geteuid()) {
   pwd=getpwnam(MYUSER);
@@ -1048,9 +1054,12 @@ int main(int argc,char *argv[]) {
   setgroups(0,0);
   setgid(pwd->pw_gid);
   setuid(pwd->pw_uid);
+ } else {
+  pwd=getpwuid(getuid());
+  if(!pwd) { printf("well, shit. I don't know who I am."); return 0; }
  }
  for(c=0;c<MAXTAILS;c++) tailf[c].fp=0;
- fd=ircConnect(SERVER,PORT,argc>1?argv[1]:NICK,"segfault segfault segfault :segfault");
+ fd=ircConnect(SERVER,PORT,mynick,"segfault segfault segfault :segfault");
  chdir(pwd->pw_dir);
  startup_stuff(fd);
  return runit(fd,line_handler,extra_handler);
