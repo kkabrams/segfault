@@ -50,6 +50,8 @@ char *tailmode_to_txt(int mode) {
 }
 
 char locked_down;
+char mode_magic;
+char trigger_char;
 int start_time;
 char *mynick;
 char *redo;
@@ -65,6 +67,7 @@ struct tail {
  char *file;
  char *to;
  char *args;
+ char *user;
  char opt;
  unsigned int inode;
  int lines;
@@ -144,7 +147,7 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'u':case 'f':case 's':case 'm'://when adding new format things add here and...
+     case 'u':case 'f':case 's':case 'm':case '%'://when adding new format things add here and...
       c++;
    }
   }
@@ -156,12 +159,12 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'u':case 'f':case 's':case 'm'://here.
+     case 'u':case 'f':case 's':case 'm':case '%'://here.
       args[c]=((fmt[i]=='u')?nick:
                ((fmt[i]=='f')?from:
                 ((fmt[i]=='m')?mynick://and here.
-                 arg
-              )));
+                 ((fmt[i]=='s')?arg:"%"
+              ))));
       fmt[i-1]=0;
       notargs[c]=strdup(fmt+j);
       sz+=strlen(args[c]);
@@ -240,11 +243,11 @@ void extra_handler(int fd) {
      if(strchr(tmp,'\n')) *strchr(tmp,'\n')=0;
      if(tailf[i].opt & TAILO_EVAL) {//eval
       if(tailf[i].args) { //only format magic evaled file lines if they have args. //why?
-       tmp2=format_magic(fd,tailf[i].to,mynick,tmp,tailf[i].args);
+       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);
       } else {
        if(!(tmp2=strdup(tmp))) exit(2);
       }
-      message_handler(fd,tailf[i].to,mynick,tmp2,0);
+      message_handler(fd,tailf[i].to,tailf[i].user,tmp2,0);
       free(tmp2);
      }
      if(tailf[i].opt & TAILO_RAW) {//raw
@@ -273,7 +276,9 @@ void extra_handler(int fd) {
  }
 }
 
-void file_tail(int fd,char *from,char *file,char *args,char opt) {
+
+//memleak in here when tails get reused without being cleared.
+void file_tail(int fd,char *from,char *file,char *args,char opt,char *user) {
  int i,j;
  int fdd;
  char tmp[256];
@@ -319,6 +324,11 @@ void file_tail(int fd,char *from,char *file,char *args,char opt) {
   }
   tailf[i].opt=opt;
   tailf[i].inode=st.st_ino;
+  tailf[i].user=strdup(user);
+  if(!tailf[i].user) {
+   mywrite(fd,"QUIT :malloc error 4.5!!! (a strdup again)\r\n");
+   return;
+  }
   tailf[i].args=args?strdup(args):0;
   if(args) {
    if(!tailf[i].args) {
@@ -337,7 +347,7 @@ void c_botup(int fd,char *from) {
  privmsg(fd,from,tmp);
 }
 
-void c_leettail(int fd,char *from,char *file) {
+void c_leettail(int fd,char *from,char *file,char *user) {
  short a=file[0]-'0';
  short b=file[1]-'0';
  short c=(a*10)+(b);
@@ -346,7 +356,7 @@ void c_leettail(int fd,char *from,char *file) {
   *args=0;
   args++;
  }
- file_tail(fd,from,file+2,args,c);
+ file_tail(fd,from,file+2,args,c,user);
 }
 
 void c_changetail(int fd,char *from,char *line) {
@@ -374,7 +384,7 @@ void c_changetail(int fd,char *from,char *line) {
 void startup_stuff(int fd) {
  mywrite(fd,"OPER g0d WAFFLEIRON\r\n");
  mywrite(fd,"JOIN #cmd\r\n");
- c_leettail(fd,"#cmd","22./scripts/startup");
+ c_leettail(fd,"#cmd","22./scripts/startup",mynick);
 }
 
 void debug_time(int fd,char *from,char *msg) {
@@ -798,7 +808,17 @@ void c_linelimit(int fd,char *from,char *msg) {
   privmsg(fd,from,tmp);
  }
  else {
-  if(atoi(msg) >= 0) {
+  if(msg[0] == 'a') {
+   mode_magic^=1;
+   privmsg(fd,from,"mode_magic flipped. happy easter!");
+  }
+  if(msg[0]=='!') {
+   if(msg[1]) {
+    trigger_char=msg[1];
+    privmsg(fd,from,"trigger_char set. more easter!");
+   }
+  }
+  if(atoi(msg) > 0) {
    line_limit=atoi(msg);
    snprintf(tmp,255,"spam line limit set to: %d",line_limit);
    privmsg(fd,from,tmp);
@@ -852,10 +872,11 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   if(msg[strlen(mynick)] == ',' || msg[strlen(mynick)] == ':') {
    if(msg[strlen(mynick)+1] == ' ') {
     msg+=strlen(mynick)+1;
-    msg[0]='!';
+    msg[0]=trigger_char;
    }
   }
  }
+ if(*msg == trigger_char) *msg='!';
  if(*msg != '!') {
   return;
  }
@@ -902,7 +923,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   c_rawrecord(fd,from,msg+11);
  }
  else if(!strncmp(msg,"!leettail ",10)) {
-  c_leettail(fd,from,msg+10);
+  c_leettail(fd,from,msg+10,nick);
  }
  else if(!strncmp(msg,"!leetuntail ",12)) {
   c_leetuntail(fd,from,msg+12);
@@ -1013,7 +1034,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   if(!strcmp(s,"JOIN")) {
    ircmode(fd,t+1,"+v",nick);//why t+1? it starts with :?
   }
-  if(!strcmp(s,"MODE")) {
+  if(!strcmp(s,"MODE") && mode_magic) {
    if(u) {
     if(*u == '-') {//auto-give modes back that are removed in front of segfault.
      *u='+';
@@ -1035,6 +1056,8 @@ int main(int argc,char *argv[]) {
  int fd;
  struct passwd *pwd;
  int c;
+ mode_magic=0;
+ trigger_char='!';
  redirect_to_fd=-1;
  debug=0;
  locked_down=(argc>2);
