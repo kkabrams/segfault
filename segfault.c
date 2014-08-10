@@ -544,13 +544,15 @@ struct alias *getalias_h(char *msg) {
 }
 
 void c_alias_h(int fd,char *from,char *line) {
+ char tmps[512];
  char *derp=strchr(line,' ');
  struct alias *tmp;
  if(!derp) {
   if((tmp=getalias_h(line)) != NULL) {
    privmsg(fd,from,tmp->target);
   } else {
-   privmsg(fd,from,"not an alias.");
+   snprintf(tmps,sizeof(tmps),"'%s' not an alias.",line);
+   privmsg(fd,from,tmps);
   }
   return;
  }
@@ -849,6 +851,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
  struct alias *m;
  char *tmp2;
  char tmp[512];
+ int len;
  int sz;
  //debug_time(fd,from);
  if(strcmp(nick,mynick)) {
@@ -867,11 +870,12 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   append_file(fd,"raw",LOG,msg,'\n');
   debug_time(fd,from,"finished writing to log.");
  }
- //if(!strchr(msg,'*')-msg)
- if(!strncmp(msg,mynick,strlen(mynick))) {
-  if(msg[strlen(mynick)] == ',' || msg[strlen(mynick)] == ':') {
-   if(msg[strlen(mynick)+1] == ' ') {
-    msg+=strlen(mynick)+1;
+ len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(mynick);
+ if(!strncmp(msg,mynick,len)) {
+  if(msg[len] == '*') len++;
+  if(msg[len] == ',' || msg[len] == ':') {
+   if(msg[len+1] == ' ') {
+    msg+=len+1;
     msg[0]=trigger_char;
    }
   }
