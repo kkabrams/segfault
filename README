@@ -1,1 +1,3 @@
-This bot expects a homedir and a user account just like any other person.
+This bot expects a homedir and a user account just like any other 
+person. If you use daemontools you can just make the run file a symlink 
+to segfault.

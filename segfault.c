@@ -49,11 +49,11 @@ char *tailmode_to_txt(int mode) {
  return m;
 }
 
+struct user *myuser;
 char locked_down;
 char mode_magic;
 char trigger_char;
 int start_time;
-char *mynick;
 char *redo;
 int redirect_to_fd;
 int line_limit;
@@ -62,12 +62,18 @@ timer_t timer;
 int lines_sent;
 unsigned long oldtime;
 
+struct user {
+ char *nick;
+ char *name;
+ char *host;
+};
+
 struct tail {
  FILE *fp;
  char *file;
  char *to;
  char *args;
- char *user;
+ struct user *user;
  char opt;
  unsigned int inode;
  int lines;
@@ -82,7 +88,7 @@ struct alias {
 
 char *shitlist[] = { 0 };
 
-void message_handler(int fd,char *from,char *nick,char *msg,int redones);
+void message_handler(int fd,char *from,struct user *user,char *msg,int redones);
 void c_untail(int fd,char *from, char *file);
 
 void mywrite(int fd,char *b) {
@@ -138,7 +144,7 @@ void privmsg(int fd,char *who,char *msg) {
 }
 
 //try to shorten this up sometime...
-char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
+char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg) {
  int i,j,sz=0,c=1;
  char *output,*fmt;
  char **args,**notargs;
@@ -147,7 +153,7 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'u':case 'f':case 's':case 'm':case '%'://when adding new format things add here and...
+     case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://when adding new format things add here and...
       c++;
    }
   }
@@ -159,12 +165,14 @@ char *format_magic(int fd,char *from,char *nick,char *orig_fmt,char *arg) {
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'u':case 'f':case 's':case 'm':case '%'://here.
-      args[c]=((fmt[i]=='u')?nick:
-               ((fmt[i]=='f')?from:
-                ((fmt[i]=='m')?mynick://and here.
-                 ((fmt[i]=='s')?arg:"%"
-              ))));
+     case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://here.
+      args[c]=((fmt[i]=='u')?user->nick:
+               ((fmt[i]=='n')?user->name:
+                ((fmt[i]=='h')?user->host:
+                 ((fmt[i]=='f')?from:
+                  ((fmt[i]=='m')?myuser->nick://and here.
+                   ((fmt[i]=='s')?arg:"%"
+              ))))));
       fmt[i-1]=0;
       notargs[c]=strdup(fmt+j);
       sz+=strlen(args[c]);
@@ -277,8 +285,7 @@ void extra_handler(int fd) {
 }
 
 
-//memleak in here when tails get reused without being cleared.
-void file_tail(int fd,char *from,char *file,char *args,char opt,char *user) {
+void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *user) {
  int i,j;
  int fdd;
  char tmp[256];
@@ -297,9 +304,9 @@ void file_tail(int fd,char *from,char *file,char *args,char opt,char *user) {
   if(tailf[j].fp && tailf[j].file && tailf[j].inode) {
    if(tailf[j].inode == st.st_ino) {
     if(debug) privmsg(fd,from,"THIS FILE IS ALREADY BEING TAILED ELSEWHERE!");
-    //i=j;
-    //break;//reuse it.
-    //return;
+    //i=j;break;//reuse it. make sure to add free()ing code for this.
+    //return;//don't tail files twice
+    //;just add another tail for it
    }
   }
  }
@@ -324,7 +331,10 @@ void file_tail(int fd,char *from,char *file,char *args,char opt,char *user) {
   }
   tailf[i].opt=opt;
   tailf[i].inode=st.st_ino;
-  tailf[i].user=strdup(user);
+  tailf[i].user=malloc(sizeof(struct user));
+  tailf[i].user->nick=strdup(user->nick);
+  tailf[i].user->name=strdup(user->name);
+  tailf[i].user->host=strdup(user->host);
   if(!tailf[i].user) {
    mywrite(fd,"QUIT :malloc error 4.5!!! (a strdup again)\r\n");
    return;
@@ -347,7 +357,7 @@ void c_botup(int fd,char *from) {
  privmsg(fd,from,tmp);
 }
 
-void c_leettail(int fd,char *from,char *file,char *user) {
+void c_leettail(int fd,char *from,char *file,struct user *user) {
  short a=file[0]-'0';
  short b=file[1]-'0';
  short c=(a*10)+(b);
@@ -384,7 +394,7 @@ void c_changetail(int fd,char *from,char *line) {
 void startup_stuff(int fd) {
  mywrite(fd,"OPER g0d WAFFLEIRON\r\n");
  mywrite(fd,"JOIN #cmd\r\n");
- c_leettail(fd,"#cmd","22./scripts/startup",mynick);
+ c_leettail(fd,"#cmd","22./scripts/startup",myuser);
 }
 
 void debug_time(int fd,char *from,char *msg) {
@@ -847,17 +857,17 @@ struct builtin[] = {
 };
 */
 
-void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
+void message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  struct alias *m;
  char *tmp2;
  char tmp[512];
  int len;
  int sz;
  //debug_time(fd,from);
- if(strcmp(nick,mynick)) {
+ if(strcmp(user->nick,myuser->nick)) {
   if(locked_down) return;
   for(sz=0;shitlist[sz];sz++) {
-   if(!strcmp(shitlist[sz],nick)) {
+   if(!strcmp(shitlist[sz],user->nick)) {
     return;
    }
   }
@@ -870,8 +880,8 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   append_file(fd,"raw",LOG,msg,'\n');
   debug_time(fd,from,"finished writing to log.");
  }
- len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(mynick);
- if(!strncmp(msg,mynick,len)) {
+ len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(myuser->nick);
+ if(!strncmp(msg,myuser->nick,len)) {
   if(msg[len] == '*') len++;
   if(msg[len] == ',' || msg[len] == ':') {
    if(msg[len+1] == ' ') {
@@ -894,10 +904,10 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   c_leetsetout(fd,from,msg+12);
  }
  else if(!strncmp(msg,"!whoareyou",10) && !msg[10]) {
-  privmsg(fd,from,mynick);
+  privmsg(fd,from,myuser->nick);
  }
  else if(!strncmp(msg,"!whoami",7) && !msg[7]) {
-  privmsg(fd,from,nick);
+  privmsg(fd,from,user->nick);
  }
  else if(!strncmp(msg,"!whereami",9) && !msg[9]) {
   privmsg(fd,from,from);
@@ -927,7 +937,7 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   c_rawrecord(fd,from,msg+11);
  }
  else if(!strncmp(msg,"!leettail ",10)) {
-  c_leettail(fd,from,msg+10,nick);
+  c_leettail(fd,from,msg+10,user);
  }
  else if(!strncmp(msg,"!leetuntail ",12)) {
   c_leetuntail(fd,from,msg+12);
@@ -972,8 +982,8 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
   debug_time(fd,from,"checking aliases...");
   if((m=getalias_h(msg)) != NULL) {
    sz=(strlen(msg)-strlen(m->original)+strlen(m->target)+1);
-   redo=format_magic(fd,from,nick,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1));
-   message_handler(fd,from,nick,redo,redones+1);
+   redo=format_magic(fd,from,user,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1));
+   message_handler(fd,from,user,redo,redones+1);
    free(redo);
    redo=0;
    return;
@@ -989,9 +999,11 @@ void message_handler(int fd,char *from,char *nick,char *msg,int redones) {
 }
 
 void line_handler(int fd,char *line) {//this should be built into the libary?
- char *s=line;
- char *nick=0,*name=0,*host=0;
- char *t=0,*u=0;
+ char *s=line,*t=0,*u=0;
+ struct user *user=malloc(sizeof(struct user));
+ user->nick=0;
+ user->name=0;
+ user->host=0;
  if(strchr(line,'\r')) *strchr(line,'\r')=0;
  if(strchr(line,'\n')) *strchr(line,'\n')=0;
  //:nick!name@host MERP DERP :message
@@ -1000,16 +1012,16 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  if(recording_raw) {
   append_file(fd,"epoch",RAWLOG,line,'\n');
  }
- if((nick=strchr(line,':'))) {
-  *nick=0;
-  nick++;
-  if((name=strchr(nick,'!'))) {
-   *name=0;
-   name++;
-   if((host=strchr(name,'@'))) {
-    *host=0;
-    host++;
-    if((s=strchr(host,' '))) {
+ if((user->nick=strchr(line,':'))) {
+  *(user->nick)=0;
+  (user->nick)++;
+  if(((user->name)=strchr((user->nick),'!'))) {
+   *(user->name)=0;
+   (user->name)++;
+   if(((user->host)=strchr((user->name),'@'))) {
+    *(user->host)=0;
+    (user->host)++;
+    if((s=strchr((user->host),' '))) {
      *s=0;
      s++;
      if((t=strchr(s,' '))) {
@@ -1029,14 +1041,14 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   if(!strcmp(s,"PRIVMSG")) {
    u++;
    if(*t == '#')//channel.
-    message_handler(fd,t,nick,u,0);
+    message_handler(fd,t,user,u,0);
    else
-    message_handler(fd,nick,nick,u,0);
+    message_handler(fd,user->nick,user,u,0);
   }
  }
- if(s && nick && t) {
+ if(s && user->nick && t) {
   if(!strcmp(s,"JOIN")) {
-   ircmode(fd,t+1,"+v",nick);//why t+1? it starts with :?
+   ircmode(fd,t+1,"+v",user->nick);//why t+1? it starts with :?
   }
   if(!strcmp(s,"MODE") && mode_magic) {
    if(u) {
@@ -1048,12 +1060,13 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
 //:Ishikawa-!~epoch@localhost NICK :checking
   if(!strcmp(s,"NICK")) {
-   if(!strcmp(nick,mynick)) {
-    free(mynick);
-    mynick=strdup(t+1);
+   if(!strcmp(user->nick,myuser->nick)) {
+    free(myuser->nick);
+    myuser->nick=strdup(t+1);
    }
   }
  }
+ free(user);
 }
 
 int main(int argc,char *argv[]) {
@@ -1073,7 +1086,10 @@ int main(int argc,char *argv[]) {
  htkl=0;
  redo=0;
  inittable();
- mynick=strdup(argc>1?argv[1]:NICK);
+ myuser=malloc(sizeof(struct user));
+ myuser->nick=strdup(argc>1?argv[1]:NICK);
+ myuser->name="I_dunno";
+ myuser->host="I_dunno";
  printf("starting segfault...\n");
  if(!getuid() || !geteuid()) {
   pwd=getpwnam(MYUSER);
@@ -1086,7 +1102,7 @@ int main(int argc,char *argv[]) {
   if(!pwd) { printf("well, shit. I don't know who I am."); return 0; }
  }
  for(c=0;c<MAXTAILS;c++) tailf[c].fp=0;
- fd=ircConnect(SERVER,PORT,mynick,"segfault segfault segfault :segfault");
+ fd=ircConnect(SERVER,PORT,myuser->nick,"segfault segfault segfault :segfault");
  chdir(pwd->pw_dir);
  startup_stuff(fd);
  return runit(fd,line_handler,extra_handler);
