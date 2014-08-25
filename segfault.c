@@ -1080,13 +1080,11 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
  }
  if(s && t && u) {
-  if(!strcmp(s,"PRIVMSG")) {
-   u++;
-   if(*t == '#')//channel.
-    message_handler(fd,t,user,u,0);
+  if(!strcmp(s,"PRIVMSG") && strcmp(user->nick,myuser->nick))
+   if(strcmp(user->nick,myuser->nick))
+    message_handler(fd,*t=='#'?t:user->nick,user,++u,0);
    else
-    message_handler(fd,user->nick,user,u,0);
-  }
+    if(debug) privmsg(fd,*t=='#'?t:user->nick,"This server has an echo");
  }
  if(s && user->nick && t) {
   if(!strcmp(s,"JOIN")) {
