@@ -14,7 +14,7 @@
 #define SERVER			"127.0.0.1"
 #define PORT			"6667"
 #define NICK			"SegFault" //override with argv[0]
-#define MYUSER			"segfault"
+#define MYUSER			getenv("seguser")?getenv("seguser"):"segfault"
 #define LINES_SENT_LIMIT	1
 #define LINELEN			400
 #define RAWLOG			"./files/rawlog"
@@ -101,7 +101,7 @@ void mywrite(int fd,char *b) {
  lines_sent++;
 }
 
-void ircmode(int fd,char *channel,char *mode,char *nick) {
+void irc_mode(int fd,char *channel,char *mode,char *nick) {
  int sz=5+strlen(channel)+1+strlen(mode)+1+strlen(nick)+3;//"MODE ", " ", " ","\r\n\0"
  char *hrm;
  if(!(hrm=malloc(sz+1))) {
@@ -109,6 +109,18 @@ void ircmode(int fd,char *channel,char *mode,char *nick) {
   return;
  }
  snprintf(hrm,sz,"MODE %s %s %s\r\n",channel,mode,nick);
+ write(fd,hrm,strlen(hrm));
+ free(hrm); 
+}
+
+void irc_nick(int fd,char *nick) {
+ int sz=5+strlen(nick)+3;//"NICK ","\r\n\0"
+ char *hrm;
+ if(!(hrm=malloc(sz+1))) {
+  mywrite(fd,"QUIT :malloc error 1.5! holy shit!\r\n");
+  return;
+ }
+ snprintf(hrm,sz,"NICK %s\r\n",nick);
  write(fd,hrm,strlen(hrm));
  free(hrm); 
 }
@@ -259,7 +271,7 @@ void extra_handler(int fd) {
       free(tmp2);
      }
      if(tailf[i].opt & TAILO_RAW) {//raw
-      tmp2=malloc(strlen(tmp)+3);
+      tmp2=malloc(strlen(tmp)+4);
       snprintf(tmp2,strlen(tmp)+3,"%s\r\n",tmp);
       mywrite(fd,tmp2);
       free(tmp2);
@@ -858,17 +870,20 @@ struct builtin[] = {
 */
 
 void message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
+ printf("message handler!\n");
  struct alias *m;
  char *tmp2;
  char tmp[512];
  int len;
  int sz;
  //debug_time(fd,from);
- if(strcmp(user->nick,myuser->nick)) {
-  if(locked_down) return;
-  for(sz=0;shitlist[sz];sz++) {
-   if(!strcmp(shitlist[sz],user->nick)) {
-    return;
+ if(user->nick) {
+  if(strcmp(user->nick,myuser->nick)) {
+   if(locked_down) return;
+   for(sz=0;shitlist[sz];sz++) {
+    if(!strcmp(shitlist[sz],user->nick)) {
+     return;
+    }
    }
   }
  }
@@ -949,12 +964,10 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   c_untail(fd,from,msg+8);
  }
  else if(!strncmp(msg,"!raw ",5)) {
-  tmp2=malloc(strlen(msg)-5+3);
-  snprintf(tmp2,strlen(msg)-5+2,"%s\r\n",msg+5);
+  tmp2=malloc(strlen(msg)-5+4);
+  snprintf(tmp2,strlen(msg)-5+3,"%s\r\n",msg+5);
   mywrite(fd,tmp2);
   free(tmp2);
-  //write(fd,msg+5,strlen(msg)-5);
-  //write(fd,"\r\n",2);
  }
  else if(!strncmp(msg,"!say ",5)) {
   privmsg(fd,from,msg+5);
@@ -999,6 +1012,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
 }
 
 void line_handler(int fd,char *line) {//this should be built into the libary?
+ printf("line: %s\n",line);
  char *s=line,*t=0,*u=0;
  struct user *user=malloc(sizeof(struct user));
  user->nick=0;
@@ -1007,36 +1021,64 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  if(strchr(line,'\r')) *strchr(line,'\r')=0;
  if(strchr(line,'\n')) *strchr(line,'\n')=0;
  //:nick!name@host MERP DERP :message
+ //:nick!name@host s t :u
+ //:armitage.hacking.allowed.org MERP DERP :message
+ //:nickhost s t :u
+ //only sub-parse nicknamehost stuff if starts with :
  //strchr doesn't like null pointers. :/ why not just take them and return null?
  //check that I haven't gone past the end of the string? nah. it should take care of itself.
  if(recording_raw) {
   append_file(fd,"epoch",RAWLOG,line,'\n');
  }
- if((user->nick=strchr(line,':'))) {
-  *(user->nick)=0;
-  (user->nick)++;
-  if(((user->name)=strchr((user->nick),'!'))) {
-   *(user->name)=0;
-   (user->name)++;
-   if(((user->host)=strchr((user->name),'@'))) {
-    *(user->host)=0;
-    (user->host)++;
-    if((s=strchr((user->host),' '))) {
-     *s=0;
-     s++;
-     if((t=strchr(s,' '))) {
-      *t=0;
-      t++;
-      if((u=strchr(t,' '))) {//:
-       *u=0;
-       u++;
-      }
-     }
-    }
+
+ // rewrite this shit.
+ if(line[0]==':') {
+  if((user->nick=strchr(line,':'))) {
+   *(user->nick)=0;
+   (user->nick)++;
+  }
+ }
+ if((s=strchr((user->nick),' '))) {
+  *s=0;
+  s++;
+  if((t=strchr(s,' '))) {
+   *t=0;
+   t++;
+   if((u=strchr(t,' '))) {//:
+    *u=0;
+    u++;
    }
   }
  }
- //printf("<%s!%s@%s> '%s' '%s' '%s'\n",nick,name,host,s,t,u);
+ if(((user->name)=strchr((user->nick),'!'))) {
+  *(user->name)=0;
+  (user->name)++;
+  if(((user->host)=strchr((user->name),'@'))) {
+   *(user->host)=0;
+   (user->host)++;
+  }
+ } else {
+  user->host=user->nick;
+ }
+ //all this shit.
+ 
+ printf("<%s!%s@%s> '%s' '%s' '%s'\n",
+        user->nick,
+        user->name,
+        user->host,
+        s,t,u);
+ if(!user->name && s) { //server message
+  if(!strcmp(s,"433")) {//nick already used.
+   srand(time(NULL));
+   myuser->nick[strlen(myuser->nick)-3]=(rand()%10)+'0';
+   myuser->nick[strlen(myuser->nick)-2]=(rand()%10)+'0';
+   myuser->nick[strlen(myuser->nick)-1]=(rand()%10)+'0';
+   irc_nick(fd,myuser->nick);
+  }
+  if(!strcmp(s,"004")) {//we're connected. start trying the startup.
+   startup_stuff(fd);
+  }
+ }
  if(s && t && u) {
   if(!strcmp(s,"PRIVMSG")) {
    u++;
@@ -1048,13 +1090,13 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  }
  if(s && user->nick && t) {
   if(!strcmp(s,"JOIN")) {
-   ircmode(fd,t+1,"+v",user->nick);//why t+1? it starts with :?
+   irc_mode(fd,t+1,"+v",user->nick);//why t+1? it starts with :?
   }
   if(!strcmp(s,"MODE") && mode_magic) {
    if(u) {
     if(*u == '-') {//auto-give modes back that are removed in front of segfault.
      *u='+';
-     ircmode(fd,t,u,"");//u contains the nick the mode is being removed from.
+     irc_mode(fd,t,u,"");//u contains the nick the mode is being removed from.
     }
    }
   }
@@ -1072,6 +1114,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
 int main(int argc,char *argv[]) {
  int fd;
  struct passwd *pwd;
+ char *s,*p;
  int c;
  mode_magic=0;
  trigger_char='!';
@@ -1099,11 +1142,18 @@ int main(int argc,char *argv[]) {
   setuid(pwd->pw_uid);
  } else {
   pwd=getpwuid(getuid());
+  printf("going to run segfault as user %s\n",pwd->pw_name);
   if(!pwd) { printf("well, shit. I don't know who I am."); return 0; }
  }
  for(c=0;c<MAXTAILS;c++) tailf[c].fp=0;
- fd=ircConnect(SERVER,PORT,myuser->nick,"segfault segfault segfault :segfault");
- chdir(pwd->pw_dir);
- startup_stuff(fd);
+ s=getenv("segserver"); s=s?:SERVER;
+ p=getenv("segport"); p=p?:PORT;
+ printf("connecting to: %s port %s\n",s,p);
+ fd=ircConnect(getenv("segserver")?getenv("segserver"):SERVER,
+               getenv("segport")?getenv("segport"):PORT,
+               myuser->nick,
+               "segfault segfault segfault :segfault");
+ printf("cd %s\n",pwd->pw_dir);
+ chdir(getenv("seghome")?getenv("seghome"):pwd->pw_dir);
  return runit(fd,line_handler,extra_handler);
 }
