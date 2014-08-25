@@ -14,7 +14,7 @@
 #define SERVER			"127.0.0.1"
 #define PORT			"6667"
 #define NICK			"SegFault" //override with argv[0]
-#define MYUSER			getenv("seguser")?getenv("seguser"):"segfault"
+#define MYUSER			"segfault"
 #define LINES_SENT_LIMIT	1
 #define LINELEN			400
 #define RAWLOG			"./files/rawlog"
@@ -1133,7 +1133,8 @@ int main(int argc,char *argv[]) {
  myuser->host="I_dunno";
  printf("starting segfault...\n");
  if(!getuid() || !geteuid()) {
-  pwd=getpwnam(MYUSER);
+  s=getenv("seguser");
+  pwd=getpwnam(s?s:MYUSER);
   if(!pwd) { printf("I'm running with euid or uid of 0 and I can't find myself."); return 0; }
   setgroups(0,0);
   setgid(pwd->pw_gid);
