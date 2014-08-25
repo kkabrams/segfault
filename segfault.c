@@ -1144,8 +1144,8 @@ int main(int argc,char *argv[]) {
   if(!pwd) { printf("well, shit. I don't know who I am."); return 0; }
  }
  for(c=0;c<MAXTAILS;c++) tailf[c].fp=0;
- s=getenv("segserver"); s=s?:SERVER;
- p=getenv("segport"); p=p?:PORT;
+ s=getenv("segserver"); s=s?s:SERVER;
+ p=getenv("segport"); p=p?p:PORT;
  printf("connecting to: %s port %s\n",s,p);
  fd=ircConnect(getenv("segserver")?getenv("segserver"):SERVER,
                getenv("segport")?getenv("segport"):PORT,
