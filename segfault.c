@@ -51,6 +51,7 @@ char *tailmode_to_txt(int mode) {
 
 struct user *myuser;
 char locked_down;
+char pid[6];
 char mode_magic;
 char trigger_char;
 int start_time;
@@ -165,7 +166,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://when adding new format things add here and...
+     case 'p':case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://when adding new format things add here and...
       c++;
    }
   }
@@ -177,14 +178,15 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://here.
+     case 'p':case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://here.
       args[c]=((fmt[i]=='u')?user->nick:
                ((fmt[i]=='n')?user->name:
                 ((fmt[i]=='h')?user->host:
                  ((fmt[i]=='f')?from:
-                  ((fmt[i]=='m')?myuser->nick://and here.
-                   ((fmt[i]=='s')?arg:"%"
-              ))))));
+                  ((fmt[i]=='p')?pid:
+                   ((fmt[i]=='m')?myuser->nick://and here.
+                    ((fmt[i]=='s')?arg:"%"
+              )))))));
       fmt[i-1]=0;
       notargs[c]=strdup(fmt+j);
       sz+=strlen(args[c]);
@@ -404,9 +406,7 @@ void c_changetail(int fd,char *from,char *line) {
 }
 
 void startup_stuff(int fd) {
- mywrite(fd,"OPER g0d WAFFLEIRON\r\n");
- mywrite(fd,"JOIN #cmd\r\n");
- c_leettail(fd,"#cmd","22./scripts/startup",myuser);
+ c_leettail(fd,myuser->nick,"22./scripts/startup",myuser);
 }
 
 void debug_time(int fd,char *from,char *msg) {
@@ -936,6 +936,11 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  else if(!strncmp(msg,"!linelimit",10) && (!msg[10] || msg[10] == ' ')) {
   c_linelimit(fd,from,*(msg+10)?msg+11:0);  
  }
+ else if(!strncmp(msg,"!nick ",6) && msg[6]) {
+  free(myuser->nick);
+  myuser->nick=strdup(msg+6);
+  irc_nick(fd,myuser->nick);
+ }
  else if(!strncmp(msg,"!tailunlock ",12)) {
   c_tailunlock(fd,from,msg+12);
  }
@@ -1069,7 +1074,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
         s,t,u);
  if(!user->name && s) { //server message
   if(!strcmp(s,"433")) {//nick already used.
-   srand(time(NULL));
+   srand(time(NULL)*getpid());
    myuser->nick[strlen(myuser->nick)-3]=(rand()%10)+'0';
    myuser->nick[strlen(myuser->nick)-2]=(rand()%10)+'0';
    myuser->nick[strlen(myuser->nick)-1]=(rand()%10)+'0';
@@ -1131,6 +1136,7 @@ int main(int argc,char *argv[]) {
  myuser->nick=strdup(argc>1?argv[1]:NICK);
  myuser->name="I_dunno";
  myuser->host="I_dunno";
+ snprintf(pid,6,"%d",getpid());
  printf("starting segfault...\n");
  if(!getuid() || !geteuid()) {
   s=getenv("seguser");
