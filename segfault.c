@@ -8,9 +8,12 @@
 #include <fcntl.h>
 #include <time.h>
 #include <pwd.h>
+
 #include "libirc/irc.h" //epoch's libirc. should be included with segfault.
+#include "libhashtable/hashtable.h" //epoch's also.
 
 //might want to change some of these.
+#define TSIZE			65535
 #define SERVER			"127.0.0.1"
 #define PORT			"6667"
 #define NICK			"SegFault" //override with argv[0]
@@ -21,7 +24,6 @@
 #define LOG			"./files/log"
 #define MAXTAILS		400 //just to have it more than the system default.
 #define BS 502
-#define TSIZE 65536             //size of hashtable. 65k isn't bad, right?
 // !c uses 56 for its tail.
 // 56 == 32 + 16 + 8 == 0x38 == 0x20+0x10+0x8 == SPAM | BEGIN | MSG
 #define TAILO_RAW    (0x1) // r output gets sent directly to server
@@ -63,6 +65,8 @@ timer_t timer;
 int lines_sent;
 unsigned long oldtime;
 
+struct hashtable alias;
+
 struct user {
  char *nick;
  char *name;
@@ -79,13 +83,6 @@ struct tail {
  unsigned int inode;
  int lines;
 } tailf[MAXTAILS];
-
-struct alias {
- char *original;
- char *target;
- struct alias *prev;// doubly linked list.
- struct alias *next;
-};
 
 char *shitlist[] = { 0 };
 
@@ -417,108 +414,20 @@ void debug_time(int fd,char *from,char *msg) {
  }
 }
 
-struct alias *leetgetalias(struct alias *start,char *msg) {
- struct alias *m;
- if(!msg) return NULL;
- if(!start) return NULL;
- for(m=start;m;m=m->next) {
-  if(!strncmp(msg,m->original,strlen(m->original)) && (msg[strlen(m->original)]==' ' || msg[strlen(m->original)] == 0)) {//this allows !c to get called when using !c2 if !c2 is defined after !c. >_>
-   return m;
-  }
- }
- return NULL;
-}
-
-unsigned short hash(char *v) {//maybe use a seeded rand()? :) Thanks FreeArtMan
- unsigned short h=0;
- h=((*v)<<8)+(v?*(v+1):0);
- srand(h);
- return rand();
-}
-
-struct hitem {//with a stick
- struct alias *ll;
-};
-
-struct hitem **hashtable;
-int htkeys[TSIZE];
-int htkl;
-
-void inittable() {
- int i;
- hashtable=malloc(sizeof(char *)*TSIZE);
- if(!hashtable) {
-  fprintf(stderr,"malloc error 6 in hash table.\n");
-  return;
- }
- for(i=0;i<TSIZE;i++) {
-  hashtable[i]=0;
- }
-}
-
-struct alias *getkey_h(char *key) {
- unsigned short h=hash(key);
- if(!hashtable[h]) return NULL;
- return hashtable[h]->ll;
-}
-
-//this seems too complicated.
-int setkey_h(char *key,char *value) {
- unsigned short h=hash(key);
- struct alias *tmp;
- int i;
- for(i=0;i<htkl;i++) {
-  if(htkeys[i]==h) break;
- }
- htkeys[i]=h;
- htkl=htkl>i+1?htkl:i+1;
- if(!hashtable[h]) { //empty bucket!
-  //add this to the list of used buckets so we can easily
-  //use that list later for stuff.
-  if(!(hashtable[h]=malloc(sizeof(struct hitem)))) return 1; 
-  hashtable[h]->ll=0;
-  //we now have a valid hashtable entry and a NULL ll in it.
-  //don't bother with the new ll entry yet...
- }
- if((tmp=leetgetalias(hashtable[h]->ll,key)) != NULL) {
-  //we found this alias in the ll. now to replace the value
-  free(tmp->target);
-  if(!(tmp->target=strdup(value))) return 2;
-  return 0;
- }
- if(hashtable[h]->ll == NULL) {
-  if(!(hashtable[h]->ll=malloc(sizeof(struct alias)))) return 3;
-  hashtable[h]->ll->next=0;
-  hashtable[h]->ll->prev=0;
-  if(!(hashtable[h]->ll->original=strdup(key))) return 4;
-  if(!(hashtable[h]->ll->target=strdup(value))) return 5;
- } else {
-  //go to the end and add another entry to the ll.
-  for(tmp=hashtable[h]->ll;tmp->next;tmp=tmp->next);
-  if(!(tmp->next=malloc(sizeof(struct alias)))) return 6;
-  tmp->next->prev=tmp;
-  tmp=tmp->next;
-  if(!(tmp->original=strdup(key))) return 7;
-  if(!(tmp->target=strdup(value))) return 8;
-  tmp->next=0;
- }
- return 0;
-}
-
 void c_aliases_h(int fd,char *from,char *line) {
  char tmp[512];
- struct alias *m;
+ struct entry *m;
  int i,j=0,k=0;
  if(!line){
   privmsg(fd,from,"usage: !aliases [search-term]");
   return;
  }
- for(i=0;i<htkl;i++) {
-  //snprintf(tmp,sizeof(tmp)-1,"aliases in bucket: %d",htkeys[i]);
+ for(i=0;i<alias.kl;i++) {
+  //snprintf(tmp,sizeof(tmp)-1,"aliases in bucket: %d",alias->keys[i]);
   //privmsg(fd,from,tmp);
-  for(m=hashtable[htkeys[i]]->ll;m;m=m->next) {
+  for(m=alias.bucket[alias.keys[i]]->ll;m;m=m->next) {
    if(strcasestr(m->target,line) || strcasestr(m->original,line)) {
-    snprintf(tmp,sizeof(tmp)-1,"%s -> %s",m->original,m->target);
+    snprintf(tmp,sizeof(tmp)-1," %s -> %s",m->original,m->target);
     privmsg(fd,from,tmp);
     j++;
    }
@@ -528,49 +437,17 @@ void c_aliases_h(int fd,char *from,char *line) {
  snprintf(tmp,sizeof(tmp)-1,"found %d of %d aliases",j,k);
  privmsg(fd,from,tmp);
 }
-
-//CONVERT //this is the last one that needs to be converted to
-// be used with the hashtable
 /*
-void c_rmalias_h(int fd,char *from,char *line) {
-
-}
-
-void c_leetrmalias(int fd,char *from,char *line) {
- struct alias *m;
- for(m=a_start;m;m=m->next) {
-  if(!strcmp(line,m->original)) {
-   if(m->next == 0) {
-    a_end=m->prev;
-   }
-   if(m->prev == 0) {
-    a_start=m->next;
-    free(m->target);
-    free(m->original);
-    free(m);
-   }
-   else {
-    m->prev->next=m->next;
-   }
-   privmsg(fd,from,"alias deleted");
-   return;
-  }
- }
- privmsg(fd,from,"alias not found");
- return;
-}
-*/
-
-struct alias *getalias_h(char *msg) {
+struct entry *getalias_h(char *msg) {
  return leetgetalias(getkey_h(msg),msg);
 }
-
+*/
 void c_alias_h(int fd,char *from,char *line) {
  char tmps[512];
  char *derp=strchr(line,' ');
- struct alias *tmp;
+ struct entry *tmp;
  if(!derp) {
-  if((tmp=getalias_h(line)) != NULL) {
+  if((tmp=ht_getentry(&alias,line)) != NULL) {
    privmsg(fd,from,tmp->target);
   } else {
    snprintf(tmps,sizeof(tmps),"'%s' not an alias.",line);
@@ -580,7 +457,7 @@ void c_alias_h(int fd,char *from,char *line) {
  }
  *derp=0;
  derp++;
- setkey_h(line,derp);
+ ht_setkey(&alias,line,derp);
 }
 
 //hash table version
@@ -858,7 +735,10 @@ void c_resetout(int fd,char *from) {
  privmsg(fd,from,"output reset");
 }
 
-/* maybe... that message hander is ugly.
+/* maybe... that message handler is ugly.
+//an array of built-ins? linked list? hash-table?
+//working on genericizing the hash-table code.
+//so probably ht for builtins.
 struct builtin {
  char *cmd;
  void (*func)();
@@ -870,8 +750,7 @@ struct builtin[] = {
 */
 
 void message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
- printf("message handler!\n");
- struct alias *m;
+ struct entry *m;
  char *tmp2;
  char tmp[512];
  int len;
@@ -915,6 +794,18 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  //... meh. it'd just be a LITTLE bit shorter.
 
  // this still seems horrible though. all those constants in there that are just strlen()s...
+#ifdef USE_BUILTIN_HT
+ char *command;
+ char *args;
+ command=strcpy(msg);
+ if((args=strchr(' ',msg))) {
+  *args=0;
+  args++;
+ }
+ if(builtin[hash(command)]) {
+  builtin[hash(command)]->value(args);
+ }
+#else
  if(!strncmp(msg,"!leetsetout ",12)) {
   c_leetsetout(fd,from,msg+12);
  }
@@ -995,10 +886,10 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  else if(!strncmp(msg,"!aliases",8) && (!msg[8] || msg[8] == ' ')) {
   c_aliases_h(fd,from,*(msg+8)?msg+9:0);
  }
-
+#endif
  else if(redones < 5) {
   debug_time(fd,from,"checking aliases...");
-  if((m=getalias_h(msg)) != NULL) {
+  if((m=ht_getentry(&alias,msg)) != NULL) {
    sz=(strlen(msg)-strlen(m->original)+strlen(m->target)+1);
    redo=format_magic(fd,from,user,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1));
    message_handler(fd,from,user,redo,redones+1);
@@ -1017,12 +908,12 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
 }
 
 void line_handler(int fd,char *line) {//this should be built into the libary?
- printf("line: %s\n",line);
  char *s=line,*t=0,*u=0;
  struct user *user=malloc(sizeof(struct user));
  user->nick=0;
  user->name=0;
  user->host=0;
+ printf("line: %s\n",line);
  if(strchr(line,'\r')) *strchr(line,'\r')=0;
  if(strchr(line,'\n')) *strchr(line,'\n')=0;
  //:nick!name@host MERP DERP :message
@@ -1085,15 +976,18 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
  }
  if(s && t && u) {
-  if(!strcmp(s,"PRIVMSG") && strcmp(user->nick,myuser->nick))
-   if(strcmp(user->nick,myuser->nick))
+  if(!strcmp(s,"PRIVMSG") && strcmp(user->nick,myuser->nick)) {
+   if(strcmp(user->nick,myuser->nick)) {
     message_handler(fd,*t=='#'?t:user->nick,user,++u,0);
-   else
+   }
+   else {
     if(debug) privmsg(fd,*t=='#'?t:user->nick,"This server has an echo");
+   }
+  }
  }
  if(s && user->nick && t) {
   if(!strcmp(s,"JOIN")) {
-   irc_mode(fd,t+1,"+v",user->nick);//why t+1? it starts with :?
+   irc_mode(fd,t+1,"+o",user->nick);//why t+1? it starts with :?
   }
   if(!strcmp(s,"MODE") && mode_magic) {
    if(u) {
@@ -1129,9 +1023,8 @@ int main(int argc,char *argv[]) {
  recording=0;
  recording_raw=0;
  start_time=time(0);
- htkl=0;
  redo=0;
- inittable();
+ inittable(&alias,TSIZE);
  myuser=malloc(sizeof(struct user));
  myuser->nick=strdup(argc>1?argv[1]:NICK);
  myuser->name="I_dunno";
