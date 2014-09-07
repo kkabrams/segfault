@@ -15,7 +15,7 @@ struct hashtable {
  int *keys;
 };
 unsigned short hash(char *v);//maybe use a seeded rand()? :) Thanks FreeArtMan
-void inittable(struct hashtable *ht);
+void inittable(struct hashtable *ht,int tsize);
 int ht_setkey(struct hashtable *ht,char *key,char *value);
 struct entry *ll_getentry(struct entry *start,char *msg);
 struct entry *ht_getentry(struct hashtable *ht,char *key);
