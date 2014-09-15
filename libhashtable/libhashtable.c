@@ -6,7 +6,7 @@
 /*
 struct entry {//linked list node.
  char *original;
- char *target;
+ void *target;
  struct entry *prev;// doubly linked list. why?
  struct entry *next;
 };
@@ -22,11 +22,8 @@ struct hashtable {
 };
 */
 
-unsigned short hash(char *v) {//maybe use a seeded rand()? :) Thanks FreeArtMan
- unsigned short h=0;
- h=((*v)<<8)+(v?*(v+1):0);
- srand(h);
- return rand();
+unsigned short hash(char *key) {//maybe use a seeded rand()? :) Thanks FreeArtMan
+ return (strlen(key)<<8)+(key[0]<<4)+key[1];
 }
 
 void inittable(struct hashtable *ht,int tsize) {
@@ -44,7 +41,7 @@ void inittable(struct hashtable *ht,int tsize) {
 }
 
 //this seems too complicated.
-int ht_setkey(struct hashtable *ht,char *key,char *value) {
+int ht_setkey(struct hashtable *ht,char *key,void *value) {
  unsigned short h=hash(key);
  struct entry *tmp;
  int i;
@@ -63,8 +60,9 @@ int ht_setkey(struct hashtable *ht,char *key,char *value) {
  }
  if((tmp=ll_getentry(ht->bucket[h]->ll,key)) != NULL) {
   //we found this alias in the ll. now to replace the value
-  free(tmp->target);
-  if(!(tmp->target=strdup(value))) return 2;
+  //free(tmp->target);//WHY? no.
+  //if(!(tmp->target=strdup(value))) return 2;
+  tmp->target=value;//can't strdup for non-strings. do it yourself.
   return 0;
  }
  if(ht->bucket[h]->ll == NULL) {
@@ -72,7 +70,8 @@ int ht_setkey(struct hashtable *ht,char *key,char *value) {
   ht->bucket[h]->ll->next=0;
   ht->bucket[h]->ll->prev=0;
   if(!(ht->bucket[h]->ll->original=strdup(key))) return 4;
-  if(!(ht->bucket[h]->ll->target=strdup(value))) return 5;
+  //if(!(ht->bucket[h]->ll->target=strdup(value))) return 5;
+  ht->bucket[h]->ll->target=value;
  } else {
   //go to the end and add another entry to the ll.
   for(tmp=ht->bucket[h]->ll;tmp->next;tmp=tmp->next);
@@ -80,7 +79,8 @@ int ht_setkey(struct hashtable *ht,char *key,char *value) {
   tmp->next->prev=tmp;
   tmp=tmp->next;
   if(!(tmp->original=strdup(key))) return 7;
-  if(!(tmp->target=strdup(value))) return 8;
+  //if(!(tmp->target=strdup(value))) return 8;
+  tmp->target=value;
   tmp->next=0;
  }
  return 0;
@@ -109,7 +109,7 @@ struct entry *ht_getnode(struct hashtable *ht,char *msg) {
 }
 
 //you'll probably want to use me.
-char *ht_getvalue(struct hashtable *ht,char *msg) {
+void *ht_getvalue(struct hashtable *ht,char *msg) {
  struct entry *tmp=ll_getentry(ht_getentry(ht,msg),msg);
  return tmp?tmp->target:0;
 }

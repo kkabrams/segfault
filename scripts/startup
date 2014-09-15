@@ -1,4 +1,5 @@
 !alias !rc !eval /home/segfault/scripts/rawcommand %s
 !alias !eval !leettail 22%s
 !alias !c !eval /home/segfault/scripts/command %s
+!leettail 50/home/segfault/scripts/cmd_out
 !raw join #default

@@ -19,5 +19,7 @@ int main(int argc,char *argv[]) {
   free(name);
  }
  printf("PATH='%s'\n",ht_getvalue(&ht,"PATH"));
+ //if you want to get a whole entry struct use ht_getnode();
+ //getentry() just returns the first struct in the linked list in that bucket.
  return 0;
 }

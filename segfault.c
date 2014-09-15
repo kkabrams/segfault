@@ -23,7 +23,7 @@
 #define RAWLOG			"./files/rawlog"
 #define LOG			"./files/log"
 #define MAXTAILS		400 //just to have it more than the system default.
-#define BS 502
+#define BS 4096
 // !c uses 56 for its tail.
 // 56 == 32 + 16 + 8 == 0x38 == 0x20+0x10+0x8 == SPAM | BEGIN | MSG
 #define TAILO_RAW    (0x1) // r output gets sent directly to server
@@ -66,6 +66,7 @@ int lines_sent;
 unsigned long oldtime;
 
 struct hashtable alias;
+struct hashtable builtin;
 
 struct user {
  char *nick;
@@ -87,7 +88,7 @@ struct tail {
 char *shitlist[] = { 0 };
 
 void message_handler(int fd,char *from,struct user *user,char *msg,int redones);
-void c_untail(int fd,char *from, char *file);
+void c_untail(int fd,char *from, char *file,struct user *user,...);
 
 void mywrite(int fd,char *b) {
  int r;
@@ -241,7 +242,7 @@ void extra_handler(int fd) {
    if(feof(tailf[i].fp)) {//ended up being a HELL of a lot easier... maybe fix it sometime.
     clearerr(tailf[i].fp);
     if(tailf[i].opt & TAILO_CLOSE) {//use for eval
-     c_untail(fd,tailf[i].to,tailf[i].file);
+     c_untail(fd,tailf[i].to,tailf[i].file,0);
      return;
     }
    }
@@ -255,7 +256,15 @@ void extra_handler(int fd) {
     fseek(tailf[i].fp,tmpo,SEEK_SET);//???
    }
    if(tailf[i].lines != -1) {
-    if(fgets(tmp,BS-1,tailf[i].fp) ) {//for some reason using sizeof(tmp) didn't work. >_>
+    if(fgets(tmp,BS-1,tailf[i].fp) == NULL) {//for some reason using sizeof(tmp) didn't work. >_>
+     if(tailf[i].lines != 0 && (tailf[i].opt & TAILO_ENDMSG)) {
+      privmsg(fd,tailf[i].to,"---------- TAILO_ENDMSG border ----------");
+     }
+     //snprintf(tmp2,sizeof(tmp)-1,"tailf[%d] (%s): errno: %d, ferror: %d",i,tailf[i].file,errno,ferror(tailf[i].fp));
+     //privmsg(fd,tailf[i].to,tmp2);
+     tailf[i].lines=0;
+    }
+    else {
      tailf[i].lines++;
      mmerp=0;
      if(strchr(tmp,'\r')) *strchr(tmp,'\r')=0;
@@ -282,11 +291,6 @@ void extra_handler(int fd) {
       tailf[i].lines=-1; //lock it.
       privmsg(fd,tailf[i].to,"--more--");
      }
-    } else {
-     if(tailf[i].lines != 0 && (tailf[i].opt & TAILO_ENDMSG)) {
-      privmsg(fd,tailf[i].to,"---------- TAILO_ENDMSG border ----------");
-     }
-     tailf[i].lines=0;
     }
    } else {
     //don't PM in here. shows a LOT of shit.
@@ -294,7 +298,6 @@ void extra_handler(int fd) {
   }
  }
 }
-
 
 void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *user) {
  int i,j;
@@ -329,13 +332,12 @@ void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *use
   if(!(opt & TAILO_BEGIN)) {
    eofp(tailf[i].fp);
   }
-  tailf[i].to=malloc(strlen(from)+1);
+  tailf[i].to=strdup(from);
   if(!tailf[i].to) {
    mywrite(fd,"QUIT :malloc error 3!!!\r\n");
    return;
   }
-  strcpy(tailf[i].to,from);
-  tailf[i].file=malloc(strlen(file)+1);
+  tailf[i].file=strdup(file);
   if(!tailf[i].file) {
    mywrite(fd,"QUIT :malloc error 4!!!\r\n");
    return;
@@ -358,17 +360,16 @@ void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *use
    }
   }
   tailf[i].lines=0;
-  strcpy(tailf[i].file,file);
  }
 }
 
-void c_botup(int fd,char *from) {
+void c_botup(int fd,char *from,...) {
  char tmp[256];
  snprintf(tmp,sizeof(tmp)-1,"botup: %lu",(unsigned long int)time(0)-start_time);
  privmsg(fd,from,tmp);
 }
 
-void c_leettail(int fd,char *from,char *file,struct user *user) {
+void c_leettail(int fd,char *from,char *file,struct user *user,...) {
  short a=file[0]-'0';
  short b=file[1]-'0';
  short c=(a*10)+(b);
@@ -380,14 +381,19 @@ void c_leettail(int fd,char *from,char *file,struct user *user) {
  file_tail(fd,from,file+2,args,c,user);
 }
 
-void c_changetail(int fd,char *from,char *line) {
- char *merp;
+void c_changetail(int fd,char *from,char *line,struct user *user,...) {
+ char *merp=0;
  int i;
+ char *mode=0;
  //if(line == 0) return mywrite(fd,"QUIT :line == 0 in changetail\r\n");
  //if(from == 0) return mywrite(fd,"QUIT :from == 0 in changetail\r\n");
  if((merp=strchr(line,' '))) {
   *merp=0;
   merp++;
+  if((mode=strchr(merp,' '))) {
+   *mode=0;
+   mode++;
+  }
  }
  for(i=0;i<MAXTAILS;i++) {
   //if(tailf[i].file == 0) return mywrite(fd,"QUIT :tailf[i].file == 0 in changetail\r\n");
@@ -395,11 +401,14 @@ void c_changetail(int fd,char *from,char *line) {
    if(!strcmp(tailf[i].file,line)) {
     free(tailf[i].to);
     tailf[i].to=strdup(merp);
+    if(mode) {
+     tailf[i].opt=((mode[0]-'0')*10)+(mode[1]-'0');
+    }
     return;
    }
   }
  }
- privmsg(fd,from,"error");
+ privmsg(fd,from,"tail not found");
 }
 
 void startup_stuff(int fd) {
@@ -414,7 +423,53 @@ void debug_time(int fd,char *from,char *msg) {
  }
 }
 
-void c_aliases_h(int fd,char *from,char *line) {
+void c_builtin(int fd,char *from,char *line,...) {
+ char tmp[512];
+ char *function=line;
+ char *addr;
+ unsigned int address;
+ if(!line) return;
+ if((addr=strchr(line,' '))) {
+  *addr=0;
+  addr++;
+  if(!sscanf(addr,"%08x",&address)) {
+   privmsg(fd,from,"sscanf didn't get an address.");
+   return;
+  }
+ }
+ snprintf(tmp,sizeof(tmp)-1,"address read: %08x",address);
+ privmsg(fd,from,tmp);
+ ht_setkey(&builtin,function,address);
+ return;
+}
+
+void c_builtins(int fd,char *from,char *line,...) {
+ char tmp[512];
+ struct entry *m;
+ int i,j=0,k=0;
+ if(!line){
+  privmsg(fd,from,"usage: !builtins [search-term]");
+  return;
+ }
+ for(i=0;i<builtin.kl;i++) {
+  if(debug) {
+   snprintf(tmp,sizeof(tmp)-1,"builtins in bucket: %d",builtin.keys[i]);
+   privmsg(fd,from,tmp);
+  }
+  for(m=builtin.bucket[builtin.keys[i]]->ll;m;m=m->next) {
+   if(strcasestr(m->original,line) || *line=='*') {
+    snprintf(tmp,sizeof(tmp)-1," %s -> %p",m->original,m->target);
+    privmsg(fd,from,tmp);
+    j++;
+   }
+   k++;
+  }
+ }
+ snprintf(tmp,sizeof(tmp)-1,"found %d of %d in builtins",j,k);
+ privmsg(fd,from,tmp);
+}
+
+void c_aliases_h(int fd,char *from,char *line,...) {
  char tmp[512];
  struct entry *m;
  int i,j=0,k=0;
@@ -437,17 +492,13 @@ void c_aliases_h(int fd,char *from,char *line) {
  snprintf(tmp,sizeof(tmp)-1,"found %d of %d aliases",j,k);
  privmsg(fd,from,tmp);
 }
-/*
-struct entry *getalias_h(char *msg) {
- return leetgetalias(getkey_h(msg),msg);
-}
-*/
-void c_alias_h(int fd,char *from,char *line) {
+
+void c_alias_h(int fd,char *from,char *line,...) {
  char tmps[512];
  char *derp=strchr(line,' ');
  struct entry *tmp;
  if(!derp) {
-  if((tmp=ht_getentry(&alias,line)) != NULL) {
+  if((tmp=ht_getnode(&alias,line)) != NULL) {
    privmsg(fd,from,tmp->target);
   } else {
    snprintf(tmps,sizeof(tmps),"'%s' not an alias.",line);
@@ -457,12 +508,13 @@ void c_alias_h(int fd,char *from,char *line) {
  }
  *derp=0;
  derp++;
- ht_setkey(&alias,line,derp);
+ if((tmp=ht_getnode(&alias,line))) {
+  free(tmp->target);
+ }
+ ht_setkey(&alias,line,strdup(derp));
 }
 
-//hash table version
-
-void c_kill(int fd,char *from,char *line) {
+void c_kill(int fd,char *from,char *line,...) {
  char *csig=line;
  char *cpid=strchr(line,' ');
  int sig,pid;
@@ -483,19 +535,19 @@ void c_kill(int fd,char *from,char *line) {
  }
 }
 
-void c_pid(int fd,char *from) {
+void c_pid(int fd,char *from,...) {
  char tmp[512];
  snprintf(tmp,sizeof(tmp)-1,"pid: %d",getpid());
  privmsg(fd,from,tmp);
 }
 
-void c_id(int fd,char *from) {
+void c_id(int fd,char *from,...) {
  char tmp[512];
  snprintf(tmp,sizeof(tmp)-1,"u:%d g:%d eu:%d eg:%d",getuid(),getgid(),geteuid(),getegid());
  privmsg(fd,from,tmp);
 }
 
-void c_leetuntail(int fd,char *from,char *line) {
+void c_leetuntail(int fd,char *from,char *line,...) {
  char *frm=line;
  char *file=0;
  int frmN=0;
@@ -523,7 +575,7 @@ void c_leetuntail(int fd,char *from,char *line) {
    //snprintf(tmp,sizeof(tmp)-1,"%s from %s not being tailed.",file,frm);
    //privmsg(fd,from,tmp);
   } else {
-   c_untail(fd,frm,file);
+   c_untail(fd,frm,file,0);
   }
  } else {
   frmN=atoi(frm);
@@ -542,7 +594,7 @@ void c_leetuntail(int fd,char *from,char *line) {
  }
 }
 
-void c_tailunlock(int fd,char *from,char *file) {
+void c_tailunlock(int fd,char *from,char *file,...) {
  int i;
  for(i=0;i<MAXTAILS;i++) {
   if(tailf[i].fp) {
@@ -555,7 +607,7 @@ void c_tailunlock(int fd,char *from,char *file) {
  privmsg(fd,from,"file not found in the tail list.");
 }
 
-void c_untail(int fd,char *from, char *file) {
+void c_untail(int fd,char *from, char *file,struct user *user,...) {
  int i;
  for(i=0;i<MAXTAILS;i++) {
   if(tailf[i].fp) {
@@ -612,20 +664,22 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
  return 1;
 }
 
-void c_leetappend(int fd,char *from,char *msg) {
+void c_leetappend(int fd,char *from,char *msg,...) {
  unsigned short nl;
  char *file=msg;
  char *snl=0;
  char *line=0;
- if((snl=strchr(msg,' '))) {
-  *snl=0;
-  snl++;
-  if((line=strchr(snl,' '))) {
-   *line=0;
-   line++;
+ if(msg) {
+  if((snl=strchr(msg,' '))) {
+   *snl=0;
+   snl++;
+   if((line=strchr(snl,' '))) {
+    *line=0;
+    line++;
+   }
   }
  }
- if(!snl || !line) {
+ if(!snl || !line || !msg) {
   privmsg(fd,from,"usage: !leetappend file EOL-char-dec line-to-put");
   return;
  }
@@ -633,7 +687,7 @@ void c_leetappend(int fd,char *from,char *msg) {
  append_file(fd,from,file,line,nl);
 }
 
-void c_tails(int fd,char *from) {
+void c_tails(int fd,char *from,...) {
  int i;
  int l;
  int at_least_one=0;
@@ -662,7 +716,7 @@ void c_tails(int fd,char *from) {
 
 char recording,recording_raw;
 
-void c_record(int fd,char *from,char *line) {
+void c_record(int fd,char *from,char *line,...) {
  if(*line == '0') {
   privmsg(fd,from,"no longer recording IRC.");
   recording=0;
@@ -677,7 +731,7 @@ void c_record(int fd,char *from,char *line) {
  privmsg(fd,from,recording?"1":"0");
 }
 
-void c_rawrecord(int fd,char *from,char *line) {
+void c_rawrecord(int fd,char *from,char *line,...) {
  if(*line == '0') { 
   privmsg(fd,from,"no longer recording raw IRC.");
   recording_raw=0;
@@ -693,7 +747,7 @@ void c_rawrecord(int fd,char *from,char *line) {
 }
 
 
-void c_leetsetout(int fd,char *from,char *msg) {
+void c_leetsetout(int fd,char *from,char *msg,...) {
  if(redirect_to_fd != -1) close(redirect_to_fd);
  redirect_to_fd=open(msg+3,((msg[0]-'0')*100) + ((msg[1]-'0')*10) + (msg[2]-'0'),022);
  if(redirect_to_fd == -1) {
@@ -702,7 +756,7 @@ void c_leetsetout(int fd,char *from,char *msg) {
  }
 }
 
-void c_linelimit(int fd,char *from,char *msg) {
+void c_linelimit(int fd,char *from,char *msg,...) {
  char tmp[256];
  if(!msg) {
   snprintf(tmp,255,"current spam line limit: %d (debug: %d)",line_limit,debug);
@@ -723,35 +777,45 @@ void c_linelimit(int fd,char *from,char *msg) {
    line_limit=atoi(msg);
    snprintf(tmp,255,"spam line limit set to: %d",line_limit);
    privmsg(fd,from,tmp);
-  } else {
+  }
+  else if(atoi(msg) < 0) {
    privmsg(fd,from,"hidden feature! negative line limit flips debug bit.");
    debug^=1;
+  } else {
+   //???? I dunno.
   }
  }
 }
 
-void c_resetout(int fd,char *from) {
+void c_resetout(int fd,char *from,...) {
  redirect_to_fd=-1;
  privmsg(fd,from,"output reset");
 }
 
-/* maybe... that message handler is ugly.
-//an array of built-ins? linked list? hash-table?
-//working on genericizing the hash-table code.
-//so probably ht for builtins.
-struct builtin {
- char *cmd;
- void (*func)();
-};
+void c_raw(int fd,char *from,char *msg,...) {
+ char *tmp2;
+ tmp2=malloc(strlen(msg)+4);
+ snprintf(tmp2,strlen(msg)+3,"%s\r\n",msg);
+ mywrite(fd,tmp2);
+ free(tmp2);
+}
 
-struct builtin[] = {
- "resetout", c_resetout
-};
-*/
+void c_say(int fd,char *from,char *msg,...) {
+ privmsg(fd,from,msg);
+}
+
+void c_nick(int fd,char *from,char *msg,...) {
+ free(myuser->nick);
+ myuser->nick=strdup(msg);
+ irc_nick(fd,myuser->nick);
+}
+
+void (*func)(int fd,...);
 
 void message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  struct entry *m;
- char *tmp2;
+ char *command;
+ char *args;
  char tmp[512];
  int len;
  int sz;
@@ -784,112 +848,37 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    }
   }
  }
- if(*msg == trigger_char) *msg='!';
- if(*msg != '!') {
-  return;
- }
+ //if(*msg == trigger_char) *msg='!';
+ //if(*msg != '!') {
+ // return;
+ //}
 
  //this section could probably be made a LOT shorter with
  //an array of structs that contain command and function pointer.
  //... meh. it'd just be a LITTLE bit shorter.
 
  // this still seems horrible though. all those constants in there that are just strlen()s...
-#ifdef USE_BUILTIN_HT
- char *command;
- char *args;
- command=strcpy(msg);
- if((args=strchr(' ',msg))) {
+ command=strdup(msg);
+ if(command[0] == trigger_char) {
+  command++;
+ } else {
+  return;
+ }
+ //privmsg(fd,from,command);
+ if((args=strchr(command,' '))) {
   *args=0;
   args++;
  }
- if(builtin[hash(command)]) {
-  builtin[hash(command)]->value(args);
+ if((func=ht_getvalue(&builtin,command))) {
+ // privmsg(fd,from,"found it in builtins HT.");
+ // snprintf(tmp,sizeof(tmp)-1,"c_pid: %p c_pid_returned: %p",c_pid,func);
+ // privmsg(fd,from,tmp);
+  func(fd,from,args,user);
  }
-#else
- if(!strncmp(msg,"!leetsetout ",12)) {
-  c_leetsetout(fd,from,msg+12);
- }
- else if(!strncmp(msg,"!whoareyou",10) && !msg[10]) {
-  privmsg(fd,from,myuser->nick);
- }
- else if(!strncmp(msg,"!whoami",7) && !msg[7]) {
-  privmsg(fd,from,user->nick);
- }
- else if(!strncmp(msg,"!whereami",9) && !msg[9]) {
-  privmsg(fd,from,from);
- }
- else if(!strncmp(msg,"!resetout",9) && !msg[9]) {
-  c_resetout(fd,from);
- }
- else if(!strncmp(msg,"!botup",6) && !msg[6]) {
-  c_botup(fd,from);
- }
- else if(!strncmp(msg,"!linelimit",10) && (!msg[10] || msg[10] == ' ')) {
-  c_linelimit(fd,from,*(msg+10)?msg+11:0);  
- }
- else if(!strncmp(msg,"!nick ",6) && msg[6]) {
-  free(myuser->nick);
-  myuser->nick=strdup(msg+6);
-  irc_nick(fd,myuser->nick);
- }
- else if(!strncmp(msg,"!tailunlock ",12)) {
-  c_tailunlock(fd,from,msg+12);
- }
- else if(!strncmp(msg,"!changetail ",12)) {
-  c_changetail(fd,from,msg+12);
- }
- else if(!strncmp(msg,"!tails",6) && !msg[6]) {
-  c_tails(fd,from);
- }
- else if(!strncmp(msg,"!record ",8)) {
-  c_record(fd,from,msg+8);
- }
- else if(!strncmp(msg,"!rawrecord ",11)) {
-  c_rawrecord(fd,from,msg+11);
- }
- else if(!strncmp(msg,"!leettail ",10)) {
-  c_leettail(fd,from,msg+10,user);
- }
- else if(!strncmp(msg,"!leetuntail ",12)) {
-  c_leetuntail(fd,from,msg+12);
- }
- else if(!strncmp(msg,"!leetappend ",12)) {
-  c_leetappend(fd,from,msg+12);
- }
- else if(!strncmp(msg,"!untail ",8)) {
-  c_untail(fd,from,msg+8);
- }
- else if(!strncmp(msg,"!raw ",5)) {
-  tmp2=malloc(strlen(msg)-5+4);
-  snprintf(tmp2,strlen(msg)-5+3,"%s\r\n",msg+5);
-  mywrite(fd,tmp2);
-  free(tmp2);
- }
- else if(!strncmp(msg,"!say ",5)) {
-  privmsg(fd,from,msg+5);
- }
- else if(!strncmp(msg,"!id",3) && !msg[3]) {
-  c_id(fd,from);
- }
- else if(!strncmp(msg,"!pid",4) && !msg[4]) {
-  c_pid(fd,from);
- }
- else if(!strncmp(msg,"!kill ",6)) {
-  c_kill(fd,from,msg+6);
- }
- else if(!strncmp(msg,"!alias ",7)) {
-  c_alias_h(fd,from,msg+7);
- }
-/* else if(!strncmp(msg,"!rmalias ",9)) {
-  c_rmalias(fd,from,msg+9); //need to make a hashtable version
- }*/
- else if(!strncmp(msg,"!aliases",8) && (!msg[8] || msg[8] == ' ')) {
-  c_aliases_h(fd,from,*(msg+8)?msg+9:0);
- }
-#endif
  else if(redones < 5) {
   debug_time(fd,from,"checking aliases...");
-  if((m=ht_getentry(&alias,msg)) != NULL) {
+  command--;// :>
+  if((m=ht_getnode(&alias,command)) != NULL) {
    sz=(strlen(msg)-strlen(m->original)+strlen(m->target)+1);
    redo=format_magic(fd,from,user,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1));
    message_handler(fd,from,user,redo,redones+1);
@@ -899,7 +888,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   }
   debug_time(fd,from,"finished checking aliases. not found.");
   redo=0;
-  snprintf(tmp,sizeof(tmp),"unknown command: %s",msg);
+  snprintf(tmp,sizeof(tmp),"unknown command: '%s' with args '%s'",command,args);
   privmsg(fd,from,tmp);
  }
  if(redones >5) {
@@ -1013,6 +1002,30 @@ int main(int argc,char *argv[]) {
  struct passwd *pwd;
  char *s,*p;
  int c;
+ inittable(&builtin,TSIZE);
+ ht_setkey(&builtin,"builtin",c_builtin);
+ ht_setkey(&builtin,"builtins",c_builtins);
+ ht_setkey(&builtin,"raw",c_raw);
+ ht_setkey(&builtin,"leetsetout",c_leetsetout);
+ ht_setkey(&builtin,"resetout",c_resetout);
+ ht_setkey(&builtin,"botup",c_botup);
+ ht_setkey(&builtin,"linelimit",c_linelimit);
+ ht_setkey(&builtin,"nick",c_nick);
+ ht_setkey(&builtin,"tailunlock",c_tailunlock);
+ ht_setkey(&builtin,"changetail",c_changetail);
+ ht_setkey(&builtin,"tails",c_tails);
+ ht_setkey(&builtin,"record",c_record);
+ ht_setkey(&builtin,"rawrecord",c_rawrecord);
+ ht_setkey(&builtin,"leettail",c_leettail);
+ ht_setkey(&builtin,"leetuntail",c_leetuntail);
+ ht_setkey(&builtin,"leetappend",c_leetappend);
+ ht_setkey(&builtin,"untail",c_untail);
+ ht_setkey(&builtin,"say",c_say);
+ ht_setkey(&builtin,"id",c_id);
+ ht_setkey(&builtin,"pid",c_pid);
+ ht_setkey(&builtin,"kill",c_kill);
+ ht_setkey(&builtin,"alias",c_alias_h);
+ ht_setkey(&builtin,"aliases",c_aliases_h);
  mode_magic=0;
  trigger_char='!';
  redirect_to_fd=-1;
