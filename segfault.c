@@ -385,8 +385,10 @@ void c_leettail(int fd,char *from,char *file,struct user *user,...) {
 }
 
 void c_changetail(int fd,char *from,char *line,struct user *user,...) {
+ struct stat st;
  char *merp=0;
  int i;
+ int fdd;
  char *mode=0;
  //if(line == 0) return mywrite(fd,"QUIT :line == 0 in changetail\r\n");
  //if(from == 0) return mywrite(fd,"QUIT :from == 0 in changetail\r\n");
@@ -398,10 +400,12 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
    mode++;
   }
  }
+ fdd=open(line,O_RDONLY|O_NONBLOCK,0);//HAVE to open named pipes as nonblocking.
+ fstat(fdd,&st);
  for(i=0;i<MAXTAILS;i++) {
   //if(tailf[i].file == 0) return mywrite(fd,"QUIT :tailf[i].file == 0 in changetail\r\n");
   if(tailf[i].file) {
-   if(!strcmp(tailf[i].file,line)) {
+   if(!strcmp(tailf[i].file,line) || tailf[i].inode == st.st_ino) {
     free(tailf[i].to);
     tailf[i].to=strdup(merp);
     if(mode) {
