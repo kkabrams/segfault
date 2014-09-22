@@ -1,3 +1,21 @@
 This bot expects a homedir and a user account just like any other 
 person. If you use daemontools you can just make the run file a symlink 
 to segfault.
+
+:running segfault:
+::arguments:
+argv[1]: nick
+
+::env vars:
+segserver:
+  IP or hostname of where segfault should connect to.
+  default: 127.0.0.1
+segport:
+  port of the plaintext IRC server segfault should connect to.
+  default: 6667
+seguser:
+  user that segfault should drop its root privs to.
+  default: segfault
+seghome:
+  home directory where segfault looks for its files.
+  default: home dir of seguser

@@ -7,4 +7,6 @@ all:
 	$(MAKE) segfault
 
 clean:
+	cd libirc && $(MAKE) clean
+	cd libhashtable && $(MAKE) clean
 	rm -f segfault

@@ -16,23 +16,24 @@
 #define TSIZE			65535
 #define SERVER			"127.0.0.1"
 #define PORT			"6667"
-#define NICK			"SegFault" //override with argv[0]
+#define NICK			"SegFault" //override with argv[1]
 #define MYUSER			"segfault"
 #define LINES_SENT_LIMIT	1
 #define LINELEN			400
+#define SEGHOMELEN		1024
 #define RAWLOG			"./files/rawlog"
 #define LOG			"./files/log"
 #define MAXTAILS		400 //just to have it more than the system default.
 #define BS 4096
 // !c uses 56 for its tail.
 // 56 == 32 + 16 + 8 == 0x38 == 0x20+0x10+0x8 == SPAM | BEGIN | MSG
-#define TAILO_RAW    (0x1) // r output gets sent directly to server
-#define TAILO_EVAL   (0x2) // e interpret the lines read from the tail as if they were messages to segfault
-#define TAILO_CLOSE  (0x4) // c close the file at EOF, default is to leave it open.
-#define TAILO_MSG    (0x8) // m output gets sent as a PM to the place the tail was made.
-#define TAILO_BEGIN  (0x10) //b start the tail at the beginning of the file instead of the end.
-#define TAILO_SPAM   (0x20) //s Spam control is enabled for this stream.
-#define TAILO_ENDMSG (0x40) //n show a message when the tail reaches the end of a chunk
+#define TAILO_RAW    1  // r output gets sent directly to server
+#define TAILO_EVAL   2  // e interpret the lines read from the tail as if they were messages to segfault
+#define TAILO_CLOSE  4  // c close the file at EOF, default is to leave it open.
+#define TAILO_MSG    8  // m output gets sent as a PM to the place the tail was made.
+#define TAILO_BEGIN  16 //b start the tail at the beginning of the file instead of the end.
+#define TAILO_SPAM   32 //s Spam control is enabled for this stream.
+#define TAILO_ENDMSG 64 //n show a message when the tail reaches the end of a chunk
 #define TAILO_Q_EVAL (TAILO_EVAL|TAILO_CLOSE|TAILO_BEGIN) //0x2+0x4+0x10 = 2+4+16  = 22
 #define TAILO_Q_COUT (TAILO_SPAM|TAILO_BEGIN|TAILO_MSG)  //0x20+0x10+0x8 = 32+16+8 = 56
 
@@ -157,6 +158,7 @@ void privmsg(int fd,char *who,char *msg) {
 //try to shorten this up sometime...
 char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg) {
  int i,j,sz=0,c=1;
+ char seghome[SEGHOMELEN];
  char *output,*fmt;
  char **args,**notargs;
  if(!(fmt=strdup(orig_fmt))) return 0;
@@ -164,7 +166,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'p':case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://when adding new format things add here and...
+     case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://when adding new format things add here and...
       c++;
    }
   }
@@ -176,15 +178,16 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case 'p':case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://here.
+     case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://here.
       args[c]=((fmt[i]=='u')?user->nick:
                ((fmt[i]=='n')?user->name:
-                ((fmt[i]=='h')?user->host:
-                 ((fmt[i]=='f')?from:
-                  ((fmt[i]=='p')?pid:
-                   ((fmt[i]=='m')?myuser->nick://and here.
-                    ((fmt[i]=='s')?arg:"%"
-              )))))));
+                ((fmt[i]=='~')?getcwd(seghome,SEGHOMELEN):
+                 ((fmt[i]=='h')?user->host:
+                  ((fmt[i]=='f')?from:
+                   ((fmt[i]=='p')?pid:
+                    ((fmt[i]=='m')?myuser->nick://and here.
+                     ((fmt[i]=='s')?arg:"%"
+              ))))))));
       fmt[i-1]=0;
       notargs[c]=strdup(fmt+j);
       sz+=strlen(args[c]);
@@ -703,7 +706,7 @@ void c_tails(int fd,char *from,...) {
     return;
    }
    x=tailmode_to_txt(tailf[i].opt);
-   snprintf(tmp,l,"%s [i:%d] @ %ld (%d) --[%s(%02x)]--> %s",tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to);
+   snprintf(tmp,l,"%s [i:%d] @ %ld (%d) --[%s(%02d)]--> %s",tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to);
    free(x);
    privmsg(fd,from,tmp);
    free(tmp);
@@ -782,7 +785,7 @@ void c_linelimit(int fd,char *from,char *msg,...) {
    privmsg(fd,from,"hidden feature! negative line limit flips debug bit.");
    debug^=1;
   } else {
-   //???? I dunno.
+   privmsg(fd,from,"something else!");
   }
  }
 }
@@ -888,8 +891,10 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   }
   debug_time(fd,from,"finished checking aliases. not found.");
   redo=0;
-  snprintf(tmp,sizeof(tmp),"unknown command: '%s' with args '%s'",command,args);
-  privmsg(fd,from,tmp);
+  if(debug) {
+   snprintf(tmp,sizeof(tmp)-1,"command not found: '%s' with args '%s'",command,args);
+   privmsg(fd,from,tmp);
+  }
  }
  if(redones >5) {
   privmsg(fd,from,"I don't know if I'll ever get out of this alias hole you're telling me to dig. Fuck this.");
