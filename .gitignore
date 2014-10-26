@@ -1,3 +1,4 @@
 segfault
 libirc/libirc.o
 libirc/libirc.so
+libhashtable/libhashtable.so

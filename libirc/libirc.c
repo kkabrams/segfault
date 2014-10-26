@@ -12,7 +12,7 @@
 //#define DEBUG "epoch" //nick or channel to send debug info to.
 #define CHUNK 16
 
-static int serverConnect(char *serv,char *port) {
+int serverConnect(char *serv,char *port) {
  struct addrinfo hints, *servinfo, *p;
  int rv;
  int fd=0;

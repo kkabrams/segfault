@@ -1,5 +1,5 @@
 LDFLAGS=-lirc -Llibirc -lhashtable -Llibhashtable
-CFLAGS=-pedantic -Wall
+CFLAGS=-std=c99 -pedantic -Wall
 
 all:
 	cd libirc && $(MAKE)
