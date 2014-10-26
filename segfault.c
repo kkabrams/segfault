@@ -328,13 +328,22 @@ void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *use
  if(i == MAXTAILS -1) {
   exit(3);
  }
+ if(*file == '#') {
+  from=file;
+  file=strchr(file,':');
+  if(file) {*file=0;
+   file++;
+  }
+ }
  if((fdd=open(file,O_RDONLY|O_NONBLOCK,0)) == -1) {
   snprintf(tmp,sizeof(tmp)-1,"file_tail: %s: (%s) fd:%d",strerror(errno),file,fdd);
   privmsg(fd,"#cmd",tmp);
   return;
  }
- snprintf(tmp,sizeof(tmp)-1,"file_tail opened file '%s' with fd: %d / %d",file,fdd,maxtails);
- privmsg(fd,"#cmd",tmp);
+ if(debug) {
+  snprintf(tmp,sizeof(tmp)-1,"file_tail opened file '%s' with fd: %d / %d",file,fdd,maxtails);
+  privmsg(fd,"#cmd",tmp);
+ }
  fstat(fdd,&st); // <-- is this needed?
  /*for(j=0;j<MAXTAILS;j++) {
   if(tailf[j].fp && tailf[j].file && tailf[j].inode) {
@@ -434,8 +443,10 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
   privmsg(fd,"#cmd",tmp); 
   return;
  }
- snprintf(tmp,sizeof(tmp)-1,"changetail opened file '%s' with fd: %d / %d\n",line,fdd,maxtails);
- privmsg(fd,"#cmd",tmp);
+ if(debug) {
+  snprintf(tmp,sizeof(tmp)-1,"changetail opened file '%s' with fd: %d / %d\n",line,fdd,maxtails);
+  privmsg(fd,"#cmd",tmp);
+ }
  fstat(fdd,&st);
  close(fdd);
  for(i=0;i<MAXTAILS;i++) {
@@ -451,7 +462,8 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
    }
   }
  }
- privmsg(fd,from,"tail not found");
+ snprintf(tmp,sizeof(tmp)-1,"changetail: tail (%s) not found",line);
+ privmsg(fd,from,tmp);
 }
 
 void prestartup_stuff(int fd) {
@@ -686,9 +698,10 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   privmsg(fd,from,tmp);
   return 0;
  }
- snprintf(tmp,sizeof(tmp)-1,"append_file opened file '%s' with fd: %d / %d\n",file,fdd,maxtails);
- privmsg(fd,"#cmd",tmp);
-
+ if(debug) {
+  snprintf(tmp,sizeof(tmp)-1,"append_file opened file '%s' with fd: %d / %d\n",file,fdd,maxtails);
+  privmsg(fd,"#cmd",tmp);
+ }
  if(!(fp=fdopen(fdd,"a"))) {
   snprintf(tmp,sizeof(tmp)-1,"Couldn't fdopen file (%s) fd:%d for appending.",file,fdd);
   privmsg(fd,from,tmp);
@@ -807,8 +820,10 @@ void c_leetsetout(int fd,char *from,char *msg,...) {
   privmsg(fd,"#cmd",tmp);
   return;
  }
- snprintf(tmp,sizeof(tmp)-1,"leetsetout opened file '%s' with fd: %d / %d\n",msg+3,redirect_to_fd,maxtails);
- privmsg(fd,"#cmd",tmp);
+ if(debug) {
+  snprintf(tmp,sizeof(tmp)-1,"leetsetout opened file '%s' with fd: %d / %d\n",msg+3,redirect_to_fd,maxtails);
+  privmsg(fd,"#cmd",tmp);
+ }
 }
 
 void c_linelimit(int fd,char *from,char *msg,...) {
