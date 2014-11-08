@@ -11,7 +11,7 @@ struct entry {//linked list node.
  struct entry *next;
 };
 
-struct hitem {//dunno why I don't just have this as a linked list.
+struct hitem {
  struct entry *ll;
 };
 
@@ -40,6 +40,52 @@ void inittable(struct hashtable *ht,int tsize) {
  }
 }
 
+void ll_delete(struct entry *ll) {
+ //do I have to free() any of this shit?
+ //keys are always allocated. strdup().
+ //gotta free that. anything else isn't my fault.
+ if(ll->prev) {
+  ll->prev->next=ll->next;
+ } else {
+  //I am the first node.
+ }
+ if(ll->next) {
+  ll->next->prev=ll->prev;
+ } else {
+  //I am the last node.
+ }
+ free(ll);//all these nodes are malloc()d.
+}
+
+void ll_destroy(struct entry *ll) {
+ if(ll->next) ll_destroy(ll->next);
+ free(ll->original);
+ free(ll);
+ //destroy_this_node.
+ //ll->original //malloc()d
+ //ll->target //I dunno where this comes from.
+}
+
+void ht_destroy(struct hashtable *ht) {
+ int i=0;
+ for(i=0;i<ht->kl;i++) {
+  ll_destroy(ht->bucket[ht->keys[i]]->ll);
+ }
+ free(ht->bucket);
+}
+
+void ll_freevalues(struct entry *ll) {//only use if you malloc your table.
+ if(ll->next) ll_destroy(ll->next);
+ free(ll->target);
+}
+
+void ht_freevalues(struct hashtable *ht) {
+ int i;
+ for(i=0;i<ht->kl;i++) {
+  ll_freevalues(ht->bucket[ht->keys[i]]->ll);
+ }
+}
+
 //this seems too complicated.
 int ht_setkey(struct hashtable *ht,char *key,void *value) {
  unsigned short h=hash(key);
@@ -59,10 +105,7 @@ int ht_setkey(struct hashtable *ht,char *key,void *value) {
   //don't bother with the new ll entry yet...
  }
  if((tmp=ll_getentry(ht->bucket[h]->ll,key)) != NULL) {
-  //we found this alias in the ll. now to replace the value
-  //free(tmp->target);//WHY? no.
-  //if(!(tmp->target=strdup(value))) return 2;
-  tmp->target=value;//can't strdup for non-strings. do it yourself.
+  tmp->target=value;
   return 0;
  }
  if(ht->bucket[h]->ll == NULL) {
@@ -70,7 +113,6 @@ int ht_setkey(struct hashtable *ht,char *key,void *value) {
   ht->bucket[h]->ll->next=0;
   ht->bucket[h]->ll->prev=0;
   if(!(ht->bucket[h]->ll->original=strdup(key))) return 4;
-  //if(!(ht->bucket[h]->ll->target=strdup(value))) return 5;
   ht->bucket[h]->ll->target=value;
  } else {
   //go to the end and add another entry to the ll.
@@ -79,7 +121,6 @@ int ht_setkey(struct hashtable *ht,char *key,void *value) {
   tmp->next->prev=tmp;
   tmp=tmp->next;
   if(!(tmp->original=strdup(key))) return 7;
-  //if(!(tmp->target=strdup(value))) return 8;
   tmp->target=value;
   tmp->next=0;
  }
@@ -98,12 +139,14 @@ struct entry *ll_getentry(struct entry *start,char *msg) {
  return NULL;
 }
 
+//returns the linked list at the key.
 struct entry *ht_getentry(struct hashtable *ht,char *key) {
  unsigned short h=hash(key);
  if(!ht->bucket[h]) return NULL;
  return ht->bucket[h]->ll;
 }
 
+//returns the node
 struct entry *ht_getnode(struct hashtable *ht,char *msg) {
  return ll_getentry(ht_getentry(ht,msg),msg);
 }

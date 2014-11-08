@@ -83,7 +83,7 @@ void (*func)(int fd,...);
 
 struct user {
  char *nick;
- char *name;
+ char *user;
  char *host;
 };
 
@@ -192,8 +192,8 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    i++;
    switch(fmt[i]) {
      case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://here.
-      args[c]=((fmt[i]=='u')?user->nick:
-               ((fmt[i]=='n')?user->name:
+      args[c]=((fmt[i]=='n')?user->nick:
+               ((fmt[i]=='u')?user->user:
                 ((fmt[i]=='~')?getcwd(seghome,SEGHOMELEN):
                  ((fmt[i]=='h')?user->host:
                   ((fmt[i]=='f')?from:
@@ -376,7 +376,7 @@ void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *use
   tailf[i].inode=st.st_ino;
   tailf[i].user=malloc(sizeof(struct user));
   tailf[i].user->nick=strdup(user->nick);
-  tailf[i].user->name=strdup(user->name);
+  tailf[i].user->user=strdup(user->user);
   tailf[i].user->host=strdup(user->host);
   if(!tailf[i].user) {
    mywrite(fd,"QUIT :malloc error 4.5!!! (a strdup again)\r\n");
@@ -530,6 +530,19 @@ void c_builtins(int fd,char *from,char *line,...) {
  }
  snprintf(tmp,sizeof(tmp)-1,"found %d of %d in builtins",j,k);
  privmsg(fd,from,tmp);
+}
+
+void c_amnesia(int fd,char *from,char *line,...) {//forget aliases
+ ht_freevalues(&alias);
+ ht_destroy(&alias);
+ inittable(&alias,TSIZE);
+ //put this as a builtin I guess.
+}
+
+void c_lobotomy(int fd,char *from,char *line,...) {//forget builtins
+ ht_destroy(&builtin);
+ inittable(&builtin,TSIZE);
+ //don't put this as a builtin by default. :P gotta hack that out.
 }
 
 void c_aliases_h(int fd,char *from,char *line,...) {
@@ -978,16 +991,16 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  char *s=line,*t=0,*u=0;
  struct user *user=malloc(sizeof(struct user));
  user->nick=0;
- user->name=0;
+ user->user=0;
  user->host=0;
  if(strchr(line,'\r')) *strchr(line,'\r')=0;
  if(strchr(line,'\n')) *strchr(line,'\n')=0;
  printf("line: '%s'\n",line);
- //:nick!name@host MERP DERP :message
- //:nick!name@host s t :u
+ //:nick!user@host MERP DERP :message
+ //:nick!user@host s t :u
  //:armitage.hacking.allowed.org MERP DERP :message
  //:nickhost s t :u
- //only sub-parse nicknamehost stuff if starts with :
+ //only sub-parse nickuserhost stuff if starts with :
  //strchr doesn't like null pointers. :/ why not just take them and return null?
  //check that I haven't gone past the end of the string? nah. it should take care of itself.
  if(recording_raw) {
@@ -1014,10 +1027,10 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
     }
    }
   }
-  if(((user->name)=strchr((user->nick),'!'))) {
-   *(user->name)=0;
-   (user->name)++;
-   if(((user->host)=strchr((user->name),'@'))) {
+  if(((user->user)=strchr((user->nick),'!'))) {
+   *(user->user)=0;
+   (user->user)++;
+   if(((user->host)=strchr((user->user),'@'))) {
     *(user->host)=0;
     (user->host)++;
    }
@@ -1029,10 +1042,10 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  
  printf("<%s!%s@%s> '%s' '%s' '%s'\n",
         user->nick,
-        user->name,
+        user->user,
         user->host,
         s,t,u);
- if(!user->name && s) { //server message
+ if(!user->user && s) { //server message
   if(!strcmp(s,"433")) {//nick already used.
    srand(time(NULL)*getpid());
    myuser->nick[strlen(myuser->nick)-3]=(rand()%10)+'0';
@@ -1128,7 +1141,7 @@ int main(int argc,char *argv[]) {
  }
  myuser=malloc(sizeof(struct user));
  myuser->nick=strdup(argc>1?argv[1]:NICK);
- myuser->name="I_dunno";
+ myuser->user="I_dunno";
  myuser->host="I_dunno";
  snprintf(pid,6,"%d",getpid());
  printf("starting segfault...\n");
