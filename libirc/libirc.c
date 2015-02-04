@@ -38,7 +38,6 @@ int serverConnect(char *serv,char *port) {
 }
 
 int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
- FILE *fp;
  fd_set master;
  fd_set readfs;
  struct timeval timeout;
@@ -53,7 +52,6 @@ int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
  FD_ZERO(&readfs);
  FD_SET(fd,&master);
  fdmax=fd;
- fp=fdopen(fd,"rw");
  memset(backlog,0,CHUNK);
  memset(buffer,0,CHUNK);
  if(fd) {
@@ -104,11 +102,8 @@ int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
         strcpy(t,"PONG ");
         strcat(t,line+6);
 	write(fd,t,strlen(t));
-        //fprintf(fp,"PONG %s",line+6);//a whole FILE * and fdopen JUST for this??? oy...
-        //fflush(fp);
 #ifdef DEBUG
         printf("%s\nPONG %s\n",line,line+6);
-        write(fd,"PRIVMSG %s :PONG! w00t!\r\n",DEBUG,28);
 #endif
        } else if(!strncmp(line,"ERROR",5)) {
 #ifdef DEBUG

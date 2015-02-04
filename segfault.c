@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdarg.h>
 #include <signal.h>
 #include <errno.h>
@@ -280,7 +281,6 @@ void eofp(FILE *fp) {
 //feature creature
 void extra_handler(int fd) {
  int tmpo,i;
- static int mmerp=0;
  char tmp[BS+1];
  char *tmp2;
  if(oldtime == time(0) && lines_sent > LINES_SENT_LIMIT) {//if it is still the same second, skip this function.
@@ -321,14 +321,12 @@ void extra_handler(int fd) {
     }
     else {//if there was something to read.
      tailf[i].lines++;
-     mmerp=0;
      if(strchr(tmp,'\r')) *strchr(tmp,'\r')=0;
      if(strchr(tmp,'\n')) *strchr(tmp,'\n')=0;
      if(tailf[i].opt & TAILO_EVAL) {//eval
       if(tailf[i].opt & TAILO_FORMAT) {
        tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);
       } else {
-       if(!tmp) exit(72);
        tmp2=strdup(tmp);
       }
       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,0);
