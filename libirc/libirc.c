@@ -137,6 +137,7 @@ int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
  return 0;
 }
 
+#if 0
 //yeah. this is a copy of the previous function.
 //with a bit of different stuff. didn't want to break anything yet.
 int runem(int *fd,void (*line_handler)(),void (*extra_handler)()) {
@@ -246,6 +247,7 @@ int runem(int *fd,void (*line_handler)(),void (*extra_handler)()) {
  }
  return 0;
 }
+#endif
 
 //:hack.thebackupbox.net 433 * sysbot :Nickname is already in use.
 //Need to have it check for this.
