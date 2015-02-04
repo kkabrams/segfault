@@ -88,6 +88,7 @@ void ht_freevalues(struct hashtable *ht) {
 
 //this seems too complicated.
 int ht_setkey(struct hashtable *ht,char *key,void *value) {
+ if(!key) key="(null)";
  unsigned short h=hash(key);
  struct entry *tmp;
  int i;

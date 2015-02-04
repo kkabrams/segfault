@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <pwd.h>
+#include <sys/stat.h>
 #include <sys/resource.h>
 
 #include "libirc/irc.h" //epoch's libirc. should be included with segfault.
@@ -24,7 +25,6 @@
 #define SEGHOMELEN		1024
 #define RAWLOG			"./files/rawlog"
 #define LOG			"./files/log"
-#define MAXTAILS		maxtails //just to have it more than the system default.
 #define BS 4096
 // !c uses 56 for its tail.
 // 56 == 32 + 16 + 8 == 0x38 == 0x20+0x10+0x8 == SPAM | BEGIN | MSG
@@ -39,15 +39,16 @@
 #define TAILO_Q_EVAL (TAILO_EVAL|TAILO_CLOSE|TAILO_BEGIN) //0x2+0x4+0x10 = 2+4+16  = 22
 #define TAILO_Q_COUT (TAILO_SPAM|TAILO_BEGIN|TAILO_MSG)  //0x20+0x10+0x8 = 32+16+8 = 56
 
+#define PRIVMSG_LINE_LIMIT	0
+
 //this function isn't with the rest of them because... meh.
-char *tailmode_to_txt(unsigned short mode) {
- char *modes="recmbsn";
+char *tailmode_to_txt(int mode) {
+ char *modes="recmbsnf";
  int i,j=0;
  char *m=malloc(strlen(modes));
  for(i=0;i<strlen(modes);i++) {
   if(mode & 1<<i) {
-   m[j]=modes[i];
-   j++;
+   m[j++]=modes[i];
   }
  }
  m[j]=0;
@@ -55,7 +56,6 @@ char *tailmode_to_txt(unsigned short mode) {
 }
 
 struct user *myuser;
-char locked_down;
 char pid[6];
 char mode_magic;
 char trigger_char;
@@ -68,6 +68,7 @@ timer_t timer;
 int lines_sent;
 unsigned long oldtime;
 int maxtails;
+int currentmaxtails;
 
 struct hashtable alias;
 struct hashtable builtin;
@@ -101,7 +102,7 @@ struct tail {
 char *shitlist[] = { 0 };
 
 void message_handler(int fd,char *from,struct user *user,char *msg,int redones);
-void c_untail(int fd,char *from, char *file,struct user *user,...);
+void c_leetuntail(int fd,char *from,char *line,...);
 
 void mywrite(int fd,char *b) {
  int r;
@@ -150,6 +151,7 @@ void privmsg(int fd,char *who,char *msg) {
  char *chunk,*hrm;
  int sz;
  int cs;
+ int count=0;
  if(!who) return;
  if(!msg) return;
  for(i=0;i<strlen(msg);i+=LINELEN) {
@@ -162,24 +164,44 @@ void privmsg(int fd,char *who,char *msg) {
   chunk=strndup(msg+i, cs );
   snprintf(hrm,sz+1,"PRIVMSG %s :%s\r\n",who,chunk);
   mywrite(fd,hrm);
+  count++;
   free(hrm);
   free(chunk);
+  if(count > PRIVMSG_LINE_LIMIT) break;
  }
 }
 
 //try to shorten this up sometime...
 char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg) {
- int i,j,sz=0,c=1;
+ int i=0,j=1,sz=0,c=1;
  char seghome[SEGHOMELEN];
  char *output,*fmt;
  char **args,**notargs;
+ char *argCopy;
+ char *argN[10];
+ //lets split up arg?
  if(!arg) arg="%s";
+ if(!(argCopy=strdup(arg))) return 0;
+ for(argN[j]=argCopy;argCopy[i];i++) {
+  if(argCopy[i] == ' ') {
+   argN[j]=argCopy+i;
+   argN[j][0]=0;
+   argN[j]++;
+   j++;
+  }
+ }
+ for(;j<10;j++) {
+  argN[j]="(null)";//fill up the rest to prevent null deref.
+ }
+ if(!orig_fmt) exit(70);
  if(!(fmt=strdup(orig_fmt))) return 0;
  for(i=0;fmt[i];i++) {
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://when adding new format things add here and...
+     case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
+     case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
+     case '5':case '6':case '7':case '8':case '9'://when adding new format things add here and...
       c++;
    }
   }
@@ -191,7 +213,9 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   if(fmt[i] == '%') {
    i++;
    switch(fmt[i]) {
-     case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':case 'm':case '%'://here.
+     case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
+     case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
+     case '5':case '6':case '7':case '8':case '9'://here.
       args[c]=((fmt[i]=='n')?user->nick:
                ((fmt[i]=='u')?user->user:
                 ((fmt[i]=='~')?getcwd(seghome,SEGHOMELEN):
@@ -199,10 +223,21 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
                   ((fmt[i]=='f')?from:
                    ((fmt[i]=='p')?pid:
                     ((fmt[i]=='m')?myuser->nick://and here.
-                     ((fmt[i]=='s')?arg:"%"
-              ))))))));
+                     ((fmt[i]=='s')?arg:
+                      ((fmt[i]=='0')?argN[0]:
+                       ((fmt[i]=='1')?argN[1]:
+                        ((fmt[i]=='2')?argN[2]:
+                         ((fmt[i]=='3')?argN[3]:
+             /* I bet  */ ((fmt[i]=='4')?argN[4]:
+             /* you     */ ((fmt[i]=='5')?argN[5]:
+             /* hate     */ ((fmt[i]=='6')?argN[6]:
+             /* this,     */ ((fmt[i]=='7')?argN[7]:
+             /* dontcha? :)*/ ((fmt[i]=='8')?argN[8]:
+                               ((fmt[i]=='9')?argN[9]:"%"
+              ))))))))))))))))));
       fmt[i-1]=0;
-      notargs[c]=strdup(fmt+j);
+      if(!(fmt+j)) exit(68);
+      if(!(notargs[c]=strdup(fmt+j))) exit(66);
       sz+=strlen(args[c]);
       sz+=strlen(notargs[c]);
       c++;
@@ -210,7 +245,8 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    }
   }
  }
- notargs[c]=strdup(fmt+j);
+ if(!(fmt+j)) exit(69);
+ if(!(notargs[c]=strdup(fmt+j))) exit(67);
  sz+=strlen(notargs[c]);
  output=malloc(sz+1);
  output[0]=0;
@@ -221,6 +257,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  strcat(output,notargs[i]);
  output[sz]=0;
  free(fmt);
+ free(argCopy);
  return output;
 }
 
@@ -240,6 +277,7 @@ void eofp(FILE *fp) {
 }
 
 //this function got scary. basically handles all the tail magic.
+//feature creature
 void extra_handler(int fd) {
  int tmpo,i;
  static int mmerp=0;
@@ -250,15 +288,16 @@ void extra_handler(int fd) {
  } else {
   lines_sent=0;
  }
+ oldtime=time(0);//this might fix it?
  if(redirect_to_fd != -1) {
   fd=redirect_to_fd;
  }
- for(i=0;i<MAXTAILS;i++) {//why does this loop through ALL tails instead of just however many there are?
-  if(tailf[i].fp) {       //I think I had it using a variable but that ended up being messy and doing this
-   if(feof(tailf[i].fp)) {//ended up being a HELL of a lot easier... maybe fix it sometime.
+ for(i=0;i<currentmaxtails;i++) {
+  if(tailf[i].fp) {
+   if(feof(tailf[i].fp)) {
     clearerr(tailf[i].fp);
     if(tailf[i].opt & TAILO_CLOSE) {//use for eval
-     c_untail(fd,tailf[i].to,tailf[i].file,0);
+     c_leetuntail(fd,tailf[i].to,tailf[i].file,0);
      return;
     }
    }
@@ -271,8 +310,8 @@ void extra_handler(int fd) {
    } else {
     fseek(tailf[i].fp,tmpo,SEEK_SET);//???
    }
-   if(tailf[i].lines != -1) {
-    if(fgets(tmp,BS-1,tailf[i].fp) == NULL) {//for some reason using sizeof(tmp) didn't work. >_>
+   if(tailf[i].lines != -1) {//if the tail isn't locked due to spam limit.
+    if(fgets(tmp,BS-1,tailf[i].fp) == NULL) {//if there isn't anything to read right now...
      if(tailf[i].lines != 0 && (tailf[i].opt & TAILO_ENDMSG)) {
       privmsg(fd,tailf[i].to,"---------- TAILO_ENDMSG border ----------");
      }
@@ -280,7 +319,7 @@ void extra_handler(int fd) {
      //privmsg(fd,tailf[i].to,tmp2);
      tailf[i].lines=0;
     }
-    else {
+    else {//if there was something to read.
      tailf[i].lines++;
      mmerp=0;
      if(strchr(tmp,'\r')) *strchr(tmp,'\r')=0;
@@ -289,6 +328,7 @@ void extra_handler(int fd) {
       if(tailf[i].opt & TAILO_FORMAT) {
        tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);
       } else {
+       if(!tmp) exit(72);
        tmp2=strdup(tmp);
       }
       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,0);
@@ -315,19 +355,11 @@ void extra_handler(int fd) {
  }
 }
 
-void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *user) {
+void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user) {
  int i;
  int fdd;
  char tmp[256];
  struct stat st;
- for(i=0;i<MAXTAILS;i++) {
-  if(tailf[i].fp == 0) {
-   break;
-  }
- }
- if(i == MAXTAILS -1) {
-  exit(3);
- }
  if(*file == '#') {
   from=file;
   file=strchr(file,':');
@@ -341,11 +373,11 @@ void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *use
   return;
  }
  if(debug) {
-  snprintf(tmp,sizeof(tmp)-1,"file_tail opened file '%s' with fd: %d / %d",file,fdd,maxtails);
+  snprintf(tmp,sizeof(tmp)-1,"file_tail opened file '%s' with fd: %d / %d / %d",file,fdd,currentmaxtails,maxtails);
   privmsg(fd,"#cmd",tmp);
  }
  fstat(fdd,&st); // <-- is this needed?
- /*for(j=0;j<MAXTAILS;j++) {
+ /*for(j=0;j<maxtails;j++) {
   if(tailf[j].fp && tailf[j].file && tailf[j].inode) {
    if(tailf[j].inode == st.st_ino) {
     if(debug) privmsg(fd,from,"THIS FILE IS ALREADY BEING TAILED ELSEWHERE!");
@@ -353,20 +385,23 @@ void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *use
     //return;//don't tail files twice
     //;just add another tail for it
  }}}*/
- i=fdd;//hack hack hack. :P
+ i=fdd;//hack hack hack. :P //I forgot I was using this.
+ if(i >= currentmaxtails) { currentmaxtails=i+1;}
  if(!(tailf[i].fp=fdopen(fdd,"r"))) {
   snprintf(tmp,sizeof(tmp),"file_tail: failed to fdopen(%s)\n",file);
   privmsg(fd,from,tmp);
  } else {
-  fcntl(fileno(tailf[i].fp),F_SETFL,O_NONBLOCK);
+  fcntl(fdd,F_SETFL,O_NONBLOCK);
   if(!(opt & TAILO_BEGIN)) {
    eofp(tailf[i].fp);
   }
+  if(!from) exit(73);
   tailf[i].to=strdup(from);
   if(!tailf[i].to) {
    mywrite(fd,"QUIT :malloc error 3!!!\r\n");
    return;
   }
+  if(!file) exit(74);
   tailf[i].file=strdup(file);
   if(!tailf[i].file) {
    mywrite(fd,"QUIT :malloc error 4!!!\r\n");
@@ -395,17 +430,36 @@ void file_tail(int fd,char *from,char *file,char *args,char opt,struct user *use
 
 void c_botup(int fd,char *from,...) {
  char tmp[256];
- snprintf(tmp,sizeof(tmp)-1,"botup: %lu",(unsigned long int)time(0)-start_time);
+ snprintf(tmp,sizeof(tmp)-1,"botup: %llu",time(0)-start_time);
  privmsg(fd,from,tmp);
 }
 
 void c_leettail(int fd,char *from,char *file,struct user *user,...) {
- short a=file[0]-'0';
- short b=file[1]-'0';
- short c=file[2]-'0';
- short d;
- short n;
- if(file[2] >= '0' && file[2] <= '9') {
+ int a;
+ int b;
+ int c;
+ int d;
+ int n;
+ if(!file) {
+  privmsg(fd,from,"!leettail NNfilename");
+  privmsg(fd,from,"!leettail NNNfilename");
+  privmsg(fd,from,"!leettail NN#channel:filename");
+  privmsg(fd,from,"!leettail NNN#channel:filename");
+  return;
+ }
+ if(file[0]) {
+ if(file[1]) {
+ if(file[2]) {
+  //
+ }else {
+  privmsg(fd,from,"usage1: !leettail NN filename");
+  privmsg(fd,from,"usage2: !leettail NNN filename");
+  return;
+ }}}
+ a=file[0]-'0';
+ b=file[1]-'0';
+ c=file[2]-'0';
+ if(c >= 0 && c <= 9) {
   d=(a*100)+(b*10)+(c);
   n=3;
  } else {
@@ -428,8 +482,10 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
  int i;
  int fdd;
  char *mode=0;
- //if(line == 0) return mywrite(fd,"QUIT :line == 0 in changetail\r\n");
- //if(from == 0) return mywrite(fd,"QUIT :from == 0 in changetail\r\n");
+ if(!line) {
+  privmsg(fd,from,"usage: !changetail filename target tailmode");
+  return;
+ }
  if((merp=strchr(line,' '))) {
   *merp=0;
   merp++;
@@ -444,16 +500,17 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
   return;
  }
  if(debug) {
-  snprintf(tmp,sizeof(tmp)-1,"changetail opened file '%s' with fd: %d / %d\n",line,fdd,maxtails);
+  snprintf(tmp,sizeof(tmp)-1,"changetail opened file '%s' with fd: %d / %d / %d\n",line,fdd,currentmaxtails,maxtails);
   privmsg(fd,"#cmd",tmp);
  }
  fstat(fdd,&st);
  close(fdd);
- for(i=0;i<MAXTAILS;i++) {
+ for(i=0;i<currentmaxtails;i++) {
   //if(tailf[i].file == 0) return mywrite(fd,"QUIT :tailf[i].file == 0 in changetail\r\n");
   if(tailf[i].file) {
    if(!strcmp(tailf[i].file,line) || tailf[i].inode == st.st_ino) {
     free(tailf[i].to);
+    if(!merp) exit(76);
     tailf[i].to=strdup(merp);
     if(mode) {
      tailf[i].opt=((mode[0]-'0')*10)+(mode[1]-'0');
@@ -491,7 +548,10 @@ void c_builtin(int fd,char *from,char *line,...) {
  char *function=line;
  char *addr;
  unsigned int address; // lol. will fail on x64
- if(!line) return;
+ if(!line) {
+  privmsg(fd,from,"usage: !builtin command [address]");
+  return;
+ }
  if((addr=strchr(line,' '))) {
   *addr=0;
   addr++;
@@ -499,10 +559,14 @@ void c_builtin(int fd,char *from,char *line,...) {
    privmsg(fd,from,"sscanf didn't get an address.");
    return;
   }
+  snprintf(tmp,sizeof(tmp)-1,"address read for %s: %08x",function,address);
+  privmsg(fd,from,tmp);
+  ht_setkey(&builtin,function,(void *)address);
+ } else {
+  address=(unsigned int)ht_getvalue(&builtin,function);
+  snprintf(tmp,sizeof(tmp)-1,"builtin %s's address: %x",function,address);
+  privmsg(fd,from,tmp);
  }
- snprintf(tmp,sizeof(tmp)-1,"address read: %08x",address);
- privmsg(fd,from,tmp);
- ht_setkey(&builtin,function,(void *)address);
  return;
 }
 
@@ -532,14 +596,14 @@ void c_builtins(int fd,char *from,char *line,...) {
  privmsg(fd,from,tmp);
 }
 
-void c_amnesia(int fd,char *from,char *line,...) {//forget aliases
+void c_amnesia(int fd,char *from,...) {//forget aliases
  ht_freevalues(&alias);
  ht_destroy(&alias);
  inittable(&alias,TSIZE);
  //put this as a builtin I guess.
 }
 
-void c_lobotomy(int fd,char *from,char *line,...) {//forget builtins
+void c_lobotomy(int fd,char *from,...) {//forget builtins
  ht_destroy(&builtin);
  inittable(&builtin,TSIZE);
  //don't put this as a builtin by default. :P gotta hack that out.
@@ -571,6 +635,10 @@ void c_aliases_h(int fd,char *from,char *line,...) {
 
 void c_alias_h(int fd,char *from,char *line,...) {
  char tmps[512];
+ if(!line) {
+  printf("usage: !alias command [other_command]");
+  return;
+ }
  char *derp=strchr(line,' ');
  struct entry *tmp;
  if(!derp) {
@@ -588,10 +656,15 @@ void c_alias_h(int fd,char *from,char *line,...) {
  if((tmp=ht_getnode(&alias,line))) {
   free(tmp->target);
  }
+ if(!derp) exit(77);
  ht_setkey(&alias,line,strdup(derp));
 }
 
 void c_kill(int fd,char *from,char *line,...) {
+ if(!line) {
+  privmsg(fd,from,"usage: !kill signum pid");
+  return;
+ }
  char *csig=line;
  char *cpid=strchr(line,' ');
  int sig,pid;
@@ -618,56 +691,68 @@ void c_id(int fd,char *from,...) {
  privmsg(fd,from,tmp);
 }
 
+//fix this fucking shit.
 void c_leetuntail(int fd,char *from,char *line,...) {
+ if(!line) {
+  privmsg(fd,from,"usage: !leetuntail [target|*] filename");
+  return;
+ }
  char *frm=line;
- char *file=0;
- int frmN=0;
+ char *file;
  int i;
- char tmp[512];
  if((file=strchr(line,' '))) {
   *file=0;
   file++;
+ } else {
+  file=line;
+  frm=".";
  }
  if(file) {
-  if(*frm == '*') {
-   for(i=0;i<MAXTAILS;i++) {
-    if(tailf[i].fp && !strcmp(tailf[i].file,file)) {
-     //c_untail(fd,tailf[i].to,file);
-     eofp(tailf[i].fp);
-     if(fclose(tailf[i].fp) == -1) {
-      privmsg(fd,from,"well, shit. fclose failed somehow.");
-     }
-     tailf[i].fp=0;
-     free(tailf[i].to);
-     free(tailf[i].file);
+  for(i=0;i<currentmaxtails;i++) {
+   if(tailf[i].fp &&
+      !strcmp(tailf[i].file,file) &&
+      ((!strcmp(tailf[i].to,from) || *frm=='*') ||
+      (!strcmp(tailf[i].to,frm) && *frm=='.'))) {
+    eofp(tailf[i].fp);
+    if(fclose(tailf[i].fp) == -1) {
+     privmsg(fd,from,"well, shit. fclose failed somehow.");
+    }
+    tailf[i].fp=0;
+    free(tailf[i].to);
+    free(tailf[i].file);
+    return;
+   }
+  }
+ }
+}
+
+//check for possibility of dedupping code.
+void c_istaillocked(int fd,char *from,char *file,...) {
+ char *msg=0;
+ int i;
+ if((msg=strchr(file,' '))) {
+  *msg=0;
+  msg++;
+ }
+ for(i=0;i<currentmaxtails;i++) {
+  if(tailf[i].fp) {
+   if(!strcmp(file,tailf[i].file)) {
+    if(tailf[i].lines == -1) {
+     privmsg(fd,from,msg?msg:"file is locked.");
      return;
     }
    }
-   //snprintf(tmp,sizeof(tmp)-1,"%s from %s not being tailed.",file,frm);
-   //privmsg(fd,from,tmp);
-  } else {
-   c_untail(fd,frm,file,0);
   }
- } else {
-  frmN=atoi(frm);
-  if(frmN < MAXTAILS && tailf[frmN].fp) {
-   if(fclose(tailf[frmN].fp) == -1) {
-    privmsg(fd,from,"well shit. fclose failed. #2");
-   }
-   tailf[frmN].fp=0;
-   free(tailf[frmN].to);
-   free(tailf[frmN].file);
-   snprintf(tmp,sizeof(tmp)-1,"untailed file tail #%d.",frmN);
-  } else {
-   snprintf(tmp,sizeof(tmp)-1,"file tail #%d isn't a valid number.",frmN);
-  }
-  privmsg(fd,from,tmp);
  }
 }
 
 void c_tailunlock(int fd,char *from,char *file,...) {
  int i;
- for(i=0;i<MAXTAILS;i++) {
+ if(!file) {
+  privmsg(fd,from,"usage: !tailunlock filename");
+  return;
+ }
+ for(i=0;i<currentmaxtails;i++) {
   if(tailf[i].fp) {
    if(!strcmp(file,tailf[i].file)) {
     tailf[i].lines=0;
@@ -676,26 +761,6 @@ void c_tailunlock(int fd,char *from,char *file,...) {
   }
  }
  privmsg(fd,from,"file not found in the tail list.");
-}
-
-void c_untail(int fd,char *from, char *file,struct user *user,...) {
- int i;
- for(i=0;i<MAXTAILS;i++) {
-  if(tailf[i].fp) {
-   if(!strcmp(from,tailf[i].to) && !strcmp(file,tailf[i].file)) {
-    if(fclose(tailf[i].fp) == -1) {
-     privmsg(fd,from,"fclose failed. #3");
-    }
-    tailf[i].fp=0;
-    free(tailf[i].to);
-    free(tailf[i].file);
-    //privmsg(fd,from,"tailed file no longer being tailed.");
-    return;
-   }
-  }
- }
- privmsg(fd,from,"I don't know what file you're talking about.");
- privmsg(fd,from,"You have to be in the same channel that the tail was set in.");
 }
 
 char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
@@ -712,7 +777,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   return 0;
  }
  if(debug) {
-  snprintf(tmp,sizeof(tmp)-1,"append_file opened file '%s' with fd: %d / %d\n",file,fdd,maxtails);
+  snprintf(tmp,sizeof(tmp)-1,"append_file opened file '%s' with fd: %d / %d / %d\n",file,fdd,currentmaxtails,maxtails);
   privmsg(fd,"#cmd",tmp);
  }
  if(!(fp=fdopen(fdd,"a"))) {
@@ -739,6 +804,10 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
 
 void c_leetappend(int fd,char *from,char *msg,...) {
  unsigned short nl;
+ if(!msg) {
+  privmsg(fd,from,"usage: !leetappend file EOL-char-dec line-to-put");
+  return;
+ }
  char *file=msg;
  char *snl=0;
  char *line=0;
@@ -765,8 +834,7 @@ void c_tails(int fd,char *from,...) {
  int l;
  int at_least_one=0;
  char *tmp,*x;
- //privmsg(fd,from,"filename@filepos --msg|raw-> IRCdestination");
- for(i=0;i<MAXTAILS;i++) {
+ for(i=0;i<currentmaxtails;i++) {
   if(tailf[i].fp) {
    at_least_one=1;
    l=(strlen(tailf[i].file) + strlen(tailf[i].to) + 50);//??? hack. fix it.
@@ -790,6 +858,10 @@ void c_tails(int fd,char *from,...) {
 char recording,recording_raw;
 
 void c_record(int fd,char *from,char *line,...) {
+ if(!line) {
+  privmsg(fd,from,"usage: !record 0|1");
+  return;
+ }
  if(*line == '0') {
   privmsg(fd,from,"no longer recording IRC.");
   recording=0;
@@ -806,7 +878,7 @@ void c_record(int fd,char *from,char *line,...) {
 
 void c_rawrecord(int fd,char *from,char *line,...) {
  if(!line) {
-  printf("that's odd.\n");
+  privmsg(fd,from,"usage: !rawrecord 0|1");
   return;
  }
  if(*line == '0') { 
@@ -825,6 +897,11 @@ void c_rawrecord(int fd,char *from,char *line,...) {
 
 
 void c_leetsetout(int fd,char *from,char *msg,...) {
+ if(!msg) {
+  privmsg(fd,from,"usage: don't");
+//  privmsg(fd,from,"usage: NNNfilename");
+  return;
+ }
  char tmp[512];
  if(redirect_to_fd != -1) close(redirect_to_fd);
  redirect_to_fd=open(msg+3,((msg[0]-'0')*100) + ((msg[1]-'0')*10) + (msg[2]-'0'),022);
@@ -834,7 +911,7 @@ void c_leetsetout(int fd,char *from,char *msg,...) {
   return;
  }
  if(debug) {
-  snprintf(tmp,sizeof(tmp)-1,"leetsetout opened file '%s' with fd: %d / %d\n",msg+3,redirect_to_fd,maxtails);
+  snprintf(tmp,sizeof(tmp)-1,"leetsetout opened file '%s' with fd: %d / %d / %d\n",msg+3,redirect_to_fd,currentmaxtails,maxtails);
   privmsg(fd,"#cmd",tmp);
  }
 }
@@ -877,6 +954,10 @@ void c_resetout(int fd,char *from,...) {
 
 void c_raw(int fd,char *from,char *msg,...) {
  char *tmp2;
+ if(!msg) {
+  privmsg(fd,from,"usage: !raw stuff-to-send-to-server");
+  return;
+ }
  tmp2=malloc(strlen(msg)+4);
  snprintf(tmp2,strlen(msg)+3,"%s\r\n",msg);
  mywrite(fd,tmp2);
@@ -884,11 +965,17 @@ void c_raw(int fd,char *from,char *msg,...) {
 }
 
 void c_say(int fd,char *from,char *msg,...) {
+ if(!msg) msg="usage: !say message";
  privmsg(fd,from,msg);
 }
 
 void c_nick(int fd,char *from,char *msg,...) {
+ if(!msg) {
+  privmsg(fd,from,"usage: !nick new-nick-to-try");
+  return;
+ }
  free(myuser->nick);
+ if(!msg) exit(78);
  myuser->nick=strdup(msg);
  irc_nick(fd,myuser->nick);
 }
@@ -896,16 +983,16 @@ void c_nick(int fd,char *from,char *msg,...) {
 void message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  struct entry *m;
  union hack lol;
+ char lambdad;
  char *command;
+ char *oldcommand;
  char *args;
-// char *magic;
  char tmp[512];
  int len;
  int sz;
  //debug_time(fd,from);
  if(user->nick) {
   if(strcmp(user->nick,myuser->nick)) {
-   if(locked_down) return;
    for(sz=0;shitlist[sz];sz++) {
     if(!strcmp(shitlist[sz],user->nick)) {
      return;
@@ -936,33 +1023,32 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  //if(*msg != '!') {
  // return;
  //}
-
- command=strdup(msg);
- if(command[0] == trigger_char) {
+ if(!msg) exit(71);
+ oldcommand=strdup(msg);
+ command=oldcommand;
+ if(*command == trigger_char) {
   command++;
  } else {
+  free(oldcommand);
   return;
  }
- //privmsg(fd,from,command);
  if((args=strchr(command,' '))) {
   *args=0;
   args++;
  }
- //if(!strncmp(command,"lambda",6)) {
- // command+=8;
- // if((args=strchr(command,' '))) {
- //  *args=0;
- //  args++;
- // }
- // args=format_magic(fd,from,user,args,":/");
- //}
+ if(!strncmp(command,"lambda",6)) {
+  command+=8;
+  if((args=strchr(command,' '))) {
+   *args=0;
+   args++;
+  }
+  args=format_magic(fd,from,user,args,":/");
+  lambdad=1;
+ }
  if((lol.data=ht_getvalue(&builtin,command))) {
   func=lol.func;
- // privmsg(fd,from,"found it in builtins HT.");
   func(fd,from,args,user);
-  //if(args != (command + strlen(command) + 2)) {
-  // free(args);
-  //}
+  if(lambdad) {free(args);}
  }
  else if(redones < 5) {
   debug_time(fd,from,"checking aliases...");
@@ -973,6 +1059,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    message_handler(fd,from,user,redo,redones+1);
    free(redo);
    redo=0;
+   free(oldcommand);
    return;
   }
   debug_time(fd,from,"finished checking aliases. not found.");
@@ -985,10 +1072,12 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  if(redones >5) {
   privmsg(fd,from,"I don't know if I'll ever get out of this alias hole you're telling me to dig. Fuck this.");
  }
+ free(oldcommand);
 }
 
 void line_handler(int fd,char *line) {//this should be built into the libary?
  char *s=line,*t=0,*u=0;
+ char tmp[512];
  struct user *user=malloc(sizeof(struct user));
  user->nick=0;
  user->user=0;
@@ -1053,9 +1142,21 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    myuser->nick[strlen(myuser->nick)-1]=(rand()%10)+'0';
    irc_nick(fd,myuser->nick);
   }
-  if(!strcmp(s,"004")) {//we're connected.
+  else if(!strcmp(s,"004")) {//we're connected.
    startup_stuff(fd);
   }
+//:armitage.hacking.allowed.org 353 asdf = #default :@SegFault @FreeArtMan @foobaz @wall @Lamb3_13 @gizmore @blackh0le
+  strcpy(tmp,"!");
+  strcat(tmp,s);
+  if(ht_getnode(&alias,tmp) != NULL) { //don't bother to do a WHOLE message handler if the alias doesn't exist.
+   snprintf(tmp,sizeof(tmp),"!%s %s",s,u);
+   message_handler(fd,"#cmd",user,tmp,0);
+  }
+/*
+:armitage.hacking.allowed.org 376 asdf :End of MOTD commandWHO #default
+:armitage.hacking.allowed.org 352 asdf #default user hostname server nick H@ :0 name
+:armitage.hacking.allowed.org 315 asdf #default :End of WHO list
+*/
  }
  if(s && t && u) {
   if(!strcmp(s,"PRIVMSG") && strcmp(user->nick,myuser->nick)) {
@@ -1083,6 +1184,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   if(!strcmp(s,"NICK")) {
    if(!strcmp(user->nick,myuser->nick)) {
     free(myuser->nick);
+    if(!t+1) exit(79);
     myuser->nick=strdup(t+1);
    }
   }
@@ -1107,6 +1209,7 @@ int main(int argc,char *argv[]) {
  BUILDIN("linelimit",c_linelimit);
  BUILDIN("nick",c_nick);
  BUILDIN("tailunlock",c_tailunlock);
+ BUILDIN("istaillocked",c_istaillocked);
  BUILDIN("changetail",c_changetail);
  BUILDIN("tails",c_tails);
  BUILDIN("record",c_record);
@@ -1114,17 +1217,17 @@ int main(int argc,char *argv[]) {
  BUILDIN("leettail",c_leettail);
  BUILDIN("leetuntail",c_leetuntail);
  BUILDIN("leetappend",c_leetappend);
- BUILDIN("untail",c_untail);
  BUILDIN("say",c_say);
  BUILDIN("id",c_id);
  BUILDIN("kill",c_kill);
  BUILDIN("alias",c_alias_h);
  BUILDIN("aliases",c_aliases_h);
+ BUILDIN("lobotomy",c_lobotomy);
+ BUILDIN("amnesia",c_amnesia);
  mode_magic=0;
  trigger_char='!';
  redirect_to_fd=-1;
  debug=0;
- locked_down=(argc>2);
  lines_sent=0;
  line_limit=25;
  recording=0;
@@ -1137,12 +1240,12 @@ int main(int argc,char *argv[]) {
   exit(0);
  } else {
   maxtails=nofile.rlim_max;
+  currentmaxtails=4;
   tailf=malloc(sizeof(struct tail) * (maxtails + 1));
  }
  myuser=malloc(sizeof(struct user));
  myuser->nick=strdup(argc>1?argv[1]:NICK);
- myuser->user="I_dunno";
- myuser->host="I_dunno";
+ myuser->host="I_dunno";//???
  snprintf(pid,6,"%d",getpid());
  printf("starting segfault...\n");
  if(!getuid() || !geteuid()) {
@@ -1157,7 +1260,8 @@ int main(int argc,char *argv[]) {
   printf("going to run segfault as user %s\n",pwd->pw_name);
   if(!pwd) { printf("well, shit. I don't know who I am."); return 0; }
  }
- for(c=0;c<MAXTAILS;c++) tailf[c].fp=0;
+ myuser->user=strdup(pwd->pw_name);
+ for(c=0;c<maxtails;c++) tailf[c].fp=0;
  s=getenv("segserver"); s=s?s:SERVER;
  p=getenv("segport"); p=p?p:PORT;
  printf("connecting to: %s port %s\n",s,p);

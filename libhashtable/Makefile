@@ -12,3 +12,4 @@ clean:
 
 install:
 	cp $(TARGET) /usr/local/lib/$(TARGET)
+	cp hashtable.h /usr/local/include/hashtable.h

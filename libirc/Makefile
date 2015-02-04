@@ -12,4 +12,4 @@ clean:
 
 install:
 	cp $(TARGET) /usr/local/lib/$(TARGET)
-	cp irc.h /usr/local/lib/irc.h
+	cp irc.h /usr/local/include/irc.h
