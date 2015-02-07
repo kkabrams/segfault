@@ -12,6 +12,6 @@ clean:
 	rm -f segfault
 
 install:
-	cp -f libhashtable/libhashtable.so /usr/local/lib/
-	cp -f libirc/libirc.so /usr/local/lib/
+	cd libirc && $(MAKE) install
+	cd libhashtable && $(MAKE) install
 	cp -f segfault /usr/local/bin/segfault

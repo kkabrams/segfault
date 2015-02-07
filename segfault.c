@@ -15,6 +15,14 @@
 #include "libirc/irc.h" //epoch's libirc. should be included with segfault.
 #include "libhashtable/hashtable.h" //epoch's also.
 
+/*// just in case your system doesn't have strndup
+char *strndup(char *s,int l) {
+ char *r=strdup(s);
+ r[l]=0;
+ return r;
+}
+*/
+
 //might want to change some of these.
 #define TSIZE			65535
 #define SERVER			"127.0.0.1"
@@ -41,20 +49,6 @@
 #define TAILO_Q_COUT (TAILO_SPAM|TAILO_BEGIN|TAILO_MSG)  //0x20+0x10+0x8 = 32+16+8 = 56
 
 #define PRIVMSG_LINE_LIMIT	0
-
-//this function isn't with the rest of them because... meh.
-char *tailmode_to_txt(int mode) {
- char *modes="recmbsnf";
- int i,j=0;
- char *m=malloc(strlen(modes));
- for(i=0;i<strlen(modes);i++) {
-  if(mode & 1<<i) {
-   m[j++]=modes[i];
-  }
- }
- m[j]=0;
- return m;
-}
 
 struct user *myuser;
 char pid[6];
@@ -105,6 +99,20 @@ char *shitlist[] = { 0 };
 void message_handler(int fd,char *from,struct user *user,char *msg,int redones);
 void c_leetuntail(int fd,char *from,char *line,...);
 
+//this function isn't with the rest of them because... meh.
+char *tailmode_to_txt(int mode) {
+ char *modes="recmbsnf";
+ int i,j=0;
+ char *m=malloc(strlen(modes));
+ for(i=0;i<strlen(modes);i++) {
+  if(mode & 1<<i) {
+   m[j++]=modes[i];
+  }
+ }
+ m[j]=0;
+ return m;
+}
+
 void mywrite(int fd,char *b) {
  int r;
  if(!b) return;
@@ -139,14 +147,6 @@ void irc_nick(int fd,char *nick) {
  free(hrm); 
 }
 
-/*// just in case your system doesn't have strndup
-char *strndup(char *s,int l) {
- char *r=strdup(s);
- r[l]=0;
- return r;
-}
-*/
-
 void privmsg(int fd,char *who,char *msg) {
  int i=0;
  char *chunk,*hrm;
@@ -180,9 +180,11 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  char **args,**notargs;
  char *argCopy;
  char *argN[10];
+ char randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
  //lets split up arg?
  if(!arg) arg="%s";
  if(!(argCopy=strdup(arg))) return 0;
+ getcwd(seghome,SEGHOMELEN);
  for(argN[j]=argCopy;argCopy[i];i++) {
   if(argCopy[i] == ' ') {
    argN[j]=argCopy+i;
@@ -202,7 +204,8 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    switch(fmt[i]) {
      case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
      case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
-     case '5':case '6':case '7':case '8':case '9'://when adding new format things add here and...
+     case '5':case '6':case '7':case '8':case '9':case 'r':
+      //when adding new format things add here and...
       c++;
    }
   }
@@ -216,10 +219,10 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    switch(fmt[i]) {
      case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
      case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
-     case '5':case '6':case '7':case '8':case '9'://here.
+     case '5':case '6':case '7':case '8':case '9':case 'r'://here.
       args[c]=((fmt[i]=='n')?user->nick:
                ((fmt[i]=='u')?user->user:
-                ((fmt[i]=='~')?getcwd(seghome,SEGHOMELEN):
+                ((fmt[i]=='~')?seghome:
                  ((fmt[i]=='h')?user->host:
                   ((fmt[i]=='f')?from:
                    ((fmt[i]=='p')?pid:
@@ -234,8 +237,9 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
              /* hate     */ ((fmt[i]=='6')?argN[6]:
              /* this,     */ ((fmt[i]=='7')?argN[7]:
              /* dontcha? :)*/ ((fmt[i]=='8')?argN[8]:
-                               ((fmt[i]=='9')?argN[9]:"%"
-              ))))))))))))))))));
+                               ((fmt[i]=='9')?argN[9]:
+                                ((fmt[i]=='r')?randC[rand()%10]:"%"
+              )))))))))))))))))));
       fmt[i-1]=0;
       if(!(fmt+j)) exit(68);
       if(!(notargs[c]=strdup(fmt+j))) exit(66);
@@ -529,10 +533,6 @@ void prestartup_stuff(int fd) {
  }
 }
 
-void startup_stuff(int fd) {
- c_leettail(fd,"#cmd","150./scripts/startup",myuser);
-}
-
 void debug_time(int fd,char *from,char *msg) {
  char tmp[100];
  if(debug) {
@@ -598,7 +598,6 @@ void c_amnesia(int fd,char *from,...) {//forget aliases
  ht_freevalues(&alias);
  ht_destroy(&alias);
  inittable(&alias,TSIZE);
- //put this as a builtin I guess.
 }
 
 void c_lobotomy(int fd,char *from,...) {//forget builtins
@@ -689,7 +688,6 @@ void c_id(int fd,char *from,...) {
  privmsg(fd,from,tmp);
 }
 
-//fix this fucking shit.
 void c_leetuntail(int fd,char *from,char *line,...) {
  if(!line) {
   privmsg(fd,from,"usage: !leetuntail [target|*] filename");
@@ -724,7 +722,6 @@ void c_leetuntail(int fd,char *from,char *line,...) {
  }
 }
 
-//check for possibility of dedupping code.
 void c_istaillocked(int fd,char *from,char *file,...) {
  char *msg=0;
  int i;
@@ -786,16 +783,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
  }
  fcntl(fileno(fp),F_SETFL,O_NONBLOCK);
  eofp(fp);
-/* mywrite(fileno(fp),line);
- mywrite(fileno(fp),"\n");*/
  fprintf(fp,"%s\n",line);
-/*
- fcntl(fdd,F_SETFL,O_NONBLOCK);
- eofd(fdd);
- mywrite(fdd,line);
- mywrite(fdd,"\n");
-*/
-// close(fdd);
  fclose(fp);
  return 1;
 }
@@ -893,7 +881,6 @@ void c_rawrecord(int fd,char *from,char *line,...) {
  privmsg(fd,from,recording_raw?"1":"0");
 }
 
-
 void c_leetsetout(int fd,char *from,char *msg,...) {
  if(!msg) {
   privmsg(fd,from,"usage: don't");
@@ -988,6 +975,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  char tmp[512];
  int len;
  int sz;
+ //privmsg(fd,"#debug",msg);
  //debug_time(fd,from);
  if(user->nick) {
   if(strcmp(user->nick,myuser->nick)) {
@@ -1093,8 +1081,6 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  if(recording_raw) {
   append_file(fd,"epoch",RAWLOG,line,'\n');
  }
-
- // rewrite this shit.
  if(line[0]==':') {
   if((user->nick=strchr(line,':'))) {
    *(user->nick)=0;
@@ -1125,7 +1111,6 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    user->host=user->nick;
   }
  }
- //all this shit.
  
  printf("<%s!%s@%s> '%s' '%s' '%s'\n",
         user->nick,
@@ -1133,28 +1118,19 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
         user->host,
         s,t,u);
  if(!user->user && s) { //server message
-  if(!strcmp(s,"433")) {//nick already used.
-   srand(time(NULL)*getpid());
-   myuser->nick[strlen(myuser->nick)-3]=(rand()%10)+'0';
-   myuser->nick[strlen(myuser->nick)-2]=(rand()%10)+'0';
-   myuser->nick[strlen(myuser->nick)-1]=(rand()%10)+'0';
-   irc_nick(fd,myuser->nick);
-  }
-  else if(!strcmp(s,"004")) {//we're connected.
-   startup_stuff(fd);
-  }
 //:armitage.hacking.allowed.org 353 asdf = #default :@SegFault @FreeArtMan @foobaz @wall @Lamb3_13 @gizmore @blackh0le
   strcpy(tmp,"!");
   strcat(tmp,s);
-  if(ht_getnode(&alias,tmp) != NULL) { //don't bother to do a WHOLE message handler if the alias doesn't exist.
+  if(ht_getnode(&alias,tmp) != NULL) {
    snprintf(tmp,sizeof(tmp),"!%s %s",s,u);
-   message_handler(fd,"#cmd",user,tmp,0);
+   user->nick=strdup("epoch");
+   user->user=strdup("epoch");
+   user->host=strdup("localhost");
+   message_handler(fd,"#cmd",user,tmp,1);
+   free(user->nick);
+   free(user->user);
+   free(user->host);
   }
-/*
-:armitage.hacking.allowed.org 376 asdf :End of MOTD commandWHO #default
-:armitage.hacking.allowed.org 352 asdf #default user hostname server nick H@ :0 name
-:armitage.hacking.allowed.org 315 asdf #default :End of WHO list
-*/
  }
  if(s && t && u) {
   if(!strcmp(s,"PRIVMSG") && strcmp(user->nick,myuser->nick)) {
@@ -1178,12 +1154,11 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
     }
    }
   }
-//:Ishikawa-!~epoch@localhost NICK :checking
-  if(!strcmp(s,"NICK")) {
+  if(!strcmp(s,"NICK") && t) {
    if(!strcmp(user->nick,myuser->nick)) {
     free(myuser->nick);
-    if(!t+1) exit(79);
-    myuser->nick=strdup(t+1);
+    if(!t) exit(79);
+    if(!(myuser->nick=strdup(t+1))) exit(179);
    }
   }
  }

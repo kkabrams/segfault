@@ -10,7 +10,7 @@
 #include <sys/select.h>
 
 //#define DEBUG "epoch" //nick or channel to send debug info to.
-#define CHUNK 16
+#define CHUNK 4096
 
 int serverConnect(char *serv,char *port) {
  struct addrinfo hints, *servinfo, *p;
