@@ -1129,7 +1129,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  }
  if(s && user->nick && t) {
   if(!strcmp(s,"JOIN")) {
-   irc_mode(fd,t+1,"+o",user->nick);//why t+1? it starts with :?
+   irc_mode(fd,t+(*t==':'),"+o",user->nick);//sometimes t will start with a : This check should go into the parser up there.
   }
   if(!strcmp(s,"MODE") && mode_magic) {
    if(u) {

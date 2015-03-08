@@ -91,7 +91,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  }
  if(s && user->nick && t) {
   if(!strcmp(s,"JOIN")) {
-   snprintf(tmp,sizeof(tmp)-1,"%cACTION %s has joined %s%c",1,user->nick,t+1,1);
+   snprintf(tmp,sizeof(tmp)-1,"%cACTION %s has joined %s%c",1,user->nick,t+(*t==':'),1);
    privmsg_others(fd,tmp);
    //send a join message to the other end.
   }
@@ -116,7 +116,7 @@ int main(int argc,char *argv[]) {
   printf("%d server: %s port: %s channel: %s\n",i,argv[(i*3)+1],argv[(i*3)+2],argv[(i*3)+3]);
   fds[i]=serverConnect(argv[(i*3)+1],argv[(i*3)+2]);
   chans[i]=strdup(argv[(i*3)+3]);
-  mywrite(fds[i],"NICK link\r\nUSER a b c :d\r\n");
+  mywrite(fds[i],"NICK link8239\r\nUSER a b c :d\r\n");
  }
  fds[i]=-1;
  //heh. you can write your own code for picking a different nick per server. fuck you.
