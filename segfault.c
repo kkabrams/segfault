@@ -64,6 +64,7 @@ int lines_sent;
 unsigned long oldtime;
 int maxtails;
 int currentmaxtails;
+char seghome[SEGHOMELEN];
 
 struct hashtable alias;
 struct hashtable builtin;
@@ -72,8 +73,6 @@ union hack {
  void (*func)(int,...);
  void *data;
 };
-
-#define HACK(a) (void *)((union hack){a}.data)
 
 void (*func)(int fd,...);
 
@@ -104,19 +103,16 @@ char *tailmode_to_txt(int mode) {
  char *modes="recmbsnf";
  int i,j=0;
  char *m=malloc(strlen(modes));
- for(i=0;i<strlen(modes);i++) {
-  if(mode & 1<<i) {
+ for(i=0;i<strlen(modes);i++)
+  if(mode & 1<<i)
    m[j++]=modes[i];
-  }
- }
  m[j]=0;
  return m;
 }
 
 void mywrite(int fd,char *b) {
  int r;
- if(!b) return;
- if(fd<0) return;
+ if(!b || fd <0) return;
  r=write(fd,b,strlen(b));
  if(r == -1) exit(1);
  if(r != strlen(b)) exit(2);
@@ -153,8 +149,7 @@ void privmsg(int fd,char *who,char *msg) {
  int sz;
  int cs;
  int count=0;
- if(!who) return;
- if(!msg) return;
+ if(!who || !msg) return;
  for(i=0;i<strlen(msg);i+=LINELEN) {
   cs=(strlen(msg+i)<=LINELEN)?strlen(msg+i):LINELEN;
   sz=8+strlen(who)+2+cs+3;//"PRIVMSG ", " :", "\r\n\0";
@@ -175,17 +170,13 @@ void privmsg(int fd,char *who,char *msg) {
 //try to shorten this up sometime...
 char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg) {
  int i=0,j=1,sz=0,c=1;
- char seghome[SEGHOMELEN];
- char *output,*fmt;
+ char overflow_space[100];
+ char *output,*fmt,*argCopy;
  char **args,**notargs;
- char *argCopy;
- char *argN[10];
- char randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
- //lets split up arg?
+ char *argN[10],randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
  if(!arg) arg="%s";
  if(!(argCopy=strdup(arg))) return 0;
- getcwd(seghome,SEGHOMELEN);
- for(argN[j]=argCopy;argCopy[i];i++) {
+ for(argN[0]=argCopy;argCopy[i];i++) {
   if(argCopy[i] == ' ') {
    argN[j]=argCopy+i;
    argN[j][0]=0;
@@ -198,18 +189,12 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  }
  if(!orig_fmt) exit(70);
  if(!(fmt=strdup(orig_fmt))) return 0;
- for(i=0;fmt[i];i++) {
-  if(fmt[i] == '%') {
-   i++;
-   switch(fmt[i]) {
+ for(i=0;fmt[i];i++)
+  if(fmt[i] == '%')
+   switch(fmt[++i])
      case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
      case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
-     case '5':case '6':case '7':case '8':case '9':case 'r':
-      //when adding new format things add here and...
-      c++;
-   }
-  }
- }
+     case '5':case '6':case '7':case '8':case '9':case 'r': c++;
  args=malloc((sizeof(char *)) * (c + 1));
  notargs=malloc((sizeof(char *)) * (c + 2));
  c=0;
@@ -219,7 +204,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    switch(fmt[i]) {
      case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
      case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
-     case '5':case '6':case '7':case '8':case '9':case 'r'://here.
+     case '5':case '6':case '7':case '8':case '9':case 'r':
       args[c]=((fmt[i]=='n')?user->nick:
                ((fmt[i]=='u')?user->user:
                 ((fmt[i]=='~')?seghome:
@@ -296,7 +281,7 @@ void extra_handler(int fd) {
  if(redirect_to_fd != -1) {
   fd=redirect_to_fd;
  }
- for(i=0;i<currentmaxtails;i++) {
+ for(i=0;i<currentmaxtails;i++) {//RIP THIS SHIT OUT SOMETIME
   if(tailf[i].fp) {
    if(feof(tailf[i].fp)) {
     clearerr(tailf[i].fp);
@@ -328,11 +313,7 @@ void extra_handler(int fd) {
      if(strchr(tmp,'\r')) *strchr(tmp,'\r')=0;
      if(strchr(tmp,'\n')) *strchr(tmp,'\n')=0;
      if(tailf[i].opt & TAILO_EVAL) {//eval
-      if(tailf[i].opt & TAILO_FORMAT) {
-       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);
-      } else {
-       tmp2=strdup(tmp);
-      }
+      tmp2=tailf[i].opt&TAILO_FORMAT?format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args):strdup(tmp);
       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,0);
       free(tmp2);
      }
@@ -398,7 +379,8 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
    eofp(tailf[i].fp);
   }
   if(!from) exit(73);
-  tailf[i].to=strdup(from);
+  if(tailf[i].to) free(tailf[i].to);
+  tailf[i].to=strdup(from);//if this properly free()d before being assigned to?
   if(!tailf[i].to) {
    mywrite(fd,"QUIT :malloc error 3!!!\r\n");
    return;
@@ -497,7 +479,7 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
   }
  }
  if((fdd=open(line,O_RDONLY|O_NONBLOCK,0)) == -1) {
-  snprintf(tmp,sizeof(tmp)-1,"%s: (%s) fd:%d",strerror(errno),line,fdd);
+  snprintf(tmp,sizeof(tmp)-1,"changetail: %s: (%s) fd:%d",strerror(errno),line,fdd);
   privmsg(fd,"#cmd",tmp); 
   return;
  }
@@ -767,7 +749,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
  derp[1]=0;
  if(line == 0) return mywrite(fd,"QUIT :line == 0 in append_file\r\n"),-1;
  if((fdd=open(file,O_WRONLY|O_NONBLOCK|O_APPEND|O_CREAT,0640)) == -1) {
-  snprintf(tmp,sizeof(tmp)-1,"%s: (%s) fd:%d",strerror(errno),file,fdd);
+  snprintf(tmp,sizeof(tmp)-1,"append_file: %s: (%s) fd:%d",strerror(errno),file,fdd);
   privmsg(fd,from,tmp);
   return 0;
  }
@@ -841,23 +823,23 @@ void c_tails(int fd,char *from,...) {
  }
 }
 
-char recording,recording_raw;
+char *recording,recording_raw;
 
 void c_record(int fd,char *from,char *line,...) {
  if(!line) {
   privmsg(fd,from,"usage: !record 0|1");
   return;
  }
- if(*line == '0') {
+ if(*line == '0' && *(line+1) == 0) {
+  if(recording) free(recording);
   privmsg(fd,from,"no longer recording IRC.");
   recording=0;
   return;
  }
- if(*line == '1') {
-  recording=1;
+ else {
+  recording=strdup(line);
   unlink(LOG);
   privmsg(fd,from,"recording IRC.");
-  return;
  }
  privmsg(fd,from,recording?"1":"0");
 }
@@ -891,7 +873,7 @@ void c_leetsetout(int fd,char *from,char *msg,...) {
  if(redirect_to_fd != -1) close(redirect_to_fd);
  redirect_to_fd=open(msg+3,((msg[0]-'0')*100) + ((msg[1]-'0')*10) + (msg[2]-'0'),022);
  if(redirect_to_fd == -1) {
-  snprintf(tmp,sizeof(tmp)-1,"%s: (%s) fd:%d",strerror(errno),msg+3,redirect_to_fd);
+  snprintf(tmp,sizeof(tmp)-1,"leetsetout: %s: (%s) fd:%d",strerror(errno),msg+3,redirect_to_fd);
   privmsg(fd,"#cmd",tmp);
   return;
  }
@@ -973,6 +955,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  char *oldcommand;
  char *args;
  char tmp[512];
+ char *tmp2;
  int len;
  int sz;
  //privmsg(fd,"#debug",msg);
@@ -991,8 +974,10 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  }
  if(recording) {
   debug_time(fd,from,"writing to log...");
-  snprintf(tmp,sizeof(tmp)-1,"<%s> %s",user->nick,msg);
-  append_file(fd,user->nick,LOG,tmp,'\n');
+  //snprintf(tmp,sizeof(tmp)-1,"<%s> %s",user->nick,msg);
+  tmp2=format_magic(fd,from,user,recording,msg);
+  append_file(fd,user->nick,LOG,tmp2,'\n');
+  free(tmp2);
   debug_time(fd,from,"finished writing to log.");
  }
  len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(myuser->nick);
@@ -1244,6 +1229,7 @@ int main(int argc,char *argv[]) {
 //               "segfault segfault segfault :segfault");
  printf("cd %s\n",pwd->pw_dir);
  chdir(getenv("seghome")?getenv("seghome"):pwd->pw_dir);
+ getcwd(seghome,SEGHOMELEN);
  prestartup_stuff(fd);
  return runit(fd,line_handler,extra_handler);
 }
