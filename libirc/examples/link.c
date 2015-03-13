@@ -40,6 +40,7 @@ void message_handler(int fd,char *from,struct user *user,char *line) {
 
 void line_handler(int fd,char *line) {//this should be built into the libary?
  char *s=line,*t=0,*u=0;
+ char *temp;
  char tmp[512];
  struct user *user=malloc(sizeof(struct user));
  user->nick=0;
@@ -81,6 +82,8 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  if(!user->user && s) {
   if(!strcmp(s,"004")) {
    snprintf(tmp,sizeof(tmp)-1,"JOIN %s\r\n",chans[fdtoi(fd)]);
+   temp=strchr(chans[fdtoi(fd)],' ');
+   if(temp) *temp=0;
    mywrite(fd,tmp);
   }
  }
@@ -93,7 +96,14 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   if(!strcmp(s,"JOIN")) {
    snprintf(tmp,sizeof(tmp)-1,"%cACTION %s has joined %s%c",1,user->nick,t+(*t==':'),1);
    privmsg_others(fd,tmp);
-   //send a join message to the other end.
+  }
+  if(!strcmp(s,"PART")) {
+   snprintf(tmp,sizeof(tmp)-1,"%cACTION %s has parted %s%c",1,user->nick,t+(*t==':'),1);
+   privmsg_others(fd,tmp);
+  }
+  if(!strcmp(s,"QUIT")) {
+   snprintf(tmp,sizeof(tmp)-1,"%cACTION %s has quited %s%c",1,user->nick,t+(*t==':'),1);
+   privmsg_others(fd,tmp);
   }
  }
  free(user);

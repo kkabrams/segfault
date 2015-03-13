@@ -360,7 +360,8 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   privmsg(fd,"#cmd",tmp);
  }
  fstat(fdd,&st); // <-- is this needed?
- /*for(j=0;j<maxtails;j++) {
+ /*
+ for(j=0;j<maxtails;j++) {
   if(tailf[j].fp && tailf[j].file && tailf[j].inode) {
    if(tailf[j].inode == st.st_ino) {
     if(debug) privmsg(fd,from,"THIS FILE IS ALREADY BEING TAILED ELSEWHERE!");
@@ -379,7 +380,12 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
    eofp(tailf[i].fp);
   }
   if(!from) exit(73);
-  if(tailf[i].to) free(tailf[i].to);
+  if(tailf[i].to) {
+   snprintf(tmp,sizeof(tmp),"tailf[%d].to: %s from: %s",i,tailf[i].to,from);
+   privmsg(fd,"#default",tmp);
+   free(tailf[i].to); //commenting this out stopped a buffer overflow. >_> weird.
+   tailf[i].to=0;
+  }
   tailf[i].to=strdup(from);//if this properly free()d before being assigned to?
   if(!tailf[i].to) {
    mywrite(fd,"QUIT :malloc error 3!!!\r\n");
@@ -494,6 +500,7 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
   if(tailf[i].file) {
    if(!strcmp(tailf[i].file,line) || tailf[i].inode == st.st_ino) {
     free(tailf[i].to);
+    tailf[i].to=0;
     if(!merp) exit(76);
     tailf[i].to=strdup(merp);
     if(mode) {
@@ -697,7 +704,9 @@ void c_leetuntail(int fd,char *from,char *line,...) {
     }
     tailf[i].fp=0;
     free(tailf[i].to);
+    tailf[i].to=0;
     free(tailf[i].file);
+    tailf[i].file=0;
     return;
    }
   }
@@ -1106,8 +1115,12 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
 //:armitage.hacking.allowed.org 353 asdf = #default :@SegFault @FreeArtMan @foobaz @wall @Lamb3_13 @gizmore @blackh0le
   strcpy(tmp,"!");
   strcat(tmp,s);
+  if(ht_getnode(&alias,tmp) == NULL && ht_getnode(&alias,"!###") != NULL) {
+   strcpy(tmp,"!###");
+  }
   if(ht_getnode(&alias,tmp) != NULL) {
-   snprintf(tmp,sizeof(tmp),"!%s %s",s,u);
+   strcat(tmp," ");
+   strcat(tmp,u);//lol. fixme later.
    user->nick=strdup("epoch");
    user->user=strdup("epoch");
    user->host=strdup("localhost");

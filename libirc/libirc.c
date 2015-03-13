@@ -37,28 +37,35 @@ int serverConnect(char *serv,char *port) {
  return p?fd:0;
 }
 
-//yeah. this is a copy of the previous function.
-//with a bit of different stuff. didn't want to break anything yet.
+int fdlen(int *fds) {
+ int i;
+ for(i=0;fds[i] != -1;i++);
+ return i+1;
+}
+
 int runem(int *fds,void (*line_handler)(),void (*extra_handler)()) {
+ int j;
+ int fdl=fdlen(fds);
  fd_set master;
  fd_set readfs;
  struct timeval timeout;
  int fdmax=0,n,s,i;
  int fd;
- char *backlog=malloc(CHUNK+1);
+ char *backlogs[fdl];
  char *t,*line=0;
  int blsize=CHUNK;
  int bllen=0;
- char buffer[CHUNK];//THIS IS *NOT* NULL TERMINATED.
- if(!backlog) return 252;
+ char buffers[fdl][CHUNK];//THIS IS *NOT* NULL TERMINATED.
  FD_ZERO(&master);
  FD_ZERO(&readfs);
  for(i=0;fds[i] != -1;i++) {
+  if(!backlogs[i]) return 252;
   FD_SET(fds[i],&master);
+  backlogs[i]=malloc(CHUNK+1);
+  memset(backlogs[i],0,CHUNK);
+  memset(buffers[i],0,CHUNK);
   fdmax=fds[i]>fdmax?fds[i]:fdmax;
  }
- memset(backlog,0,CHUNK);
- memset(buffer,0,CHUNK);
  int done=0;
  while(!done) {
   for(fd=0;fd<=fdmax;fd++) {
@@ -74,14 +81,14 @@ int runem(int *fds,void (*line_handler)(),void (*extra_handler)()) {
    perror("select");
    return 1;
   }
-  for(fd=0;fd<=fdmax;fd++) {
-   if(FD_ISSET(fd,&readfs)) {
-    if((n=recv(fd,buffer,CHUNK,0)) <= 0) {//read CHUNK bytes
+  for(i=0;fds[i] != -1;i++) {
+   if(FD_ISSET(fds[i],&readfs)) {
+    if((n=recv(fds[i],buffers[i],CHUNK,0)) <= 0) {//read CHUNK bytes
      fprintf(stderr,"recv: %d\n",n);
      perror("recv");
      return 2;
     } else {
-     buffer[n]=0;//deff right.
+     buffers[i][n]=0;//deff right.
      if(bllen+n >= blsize) {//this is probably off...
       blsize+=n;
       t=malloc(blsize);
@@ -90,30 +97,30 @@ int runem(int *fds,void (*line_handler)(),void (*extra_handler)()) {
        exit(253);
       }
       memset(t,0,blsize);//optional?
-      memcpy(t,backlog,blsize-n+1);//???
-      free(backlog);
-      backlog=t;
+      memcpy(t,backlogs[i],blsize-n+1);//???
+      free(backlogs[i]);
+      backlogs[i]=t;
      }
-     memcpy(backlog+bllen,buffer,n);
+     memcpy(backlogs[i]+bllen,buffers[i],n);
      bllen+=n;
-     for(i=0,s=0;i<bllen;i++) {
-      if(backlog[i]=='\n') {
-       line=malloc(i-s+3);//on linux it crashes without the +1 +3? weird. when did I do that?
+     for(j=0,s=0;j<bllen;j++) {
+      if(backlogs[i][j]=='\n') {
+       line=malloc(j-s+3);//on linux it crashes without the +1 +3? weird. when did I do that?
        if(!line) {
         printf("ANOTHER malloc error!\n");
         exit(254);
        }
-       memcpy(line,backlog+s,i-s+2);
-       line[i-s+1]=0;//gotta null terminate this. line_handler expects it .
-       s=i+1;//the character after the newline.
+       memcpy(line,backlogs[i]+s,j-s+2);
+       line[j-s+1]=0;//gotta null terminate this. line_handler expects it .
+       s=j+1;//the character after the newline.
        if(!strncmp(line,"PING",4)) {
         t=malloc(strlen(line));
         strcpy(t,"PONG ");
         strcat(t,line+6);
-        write(fd,t,strlen(t));
+        write(fds[i],t,strlen(t));
  #ifdef DEBUG
         printf("%s\nPONG %s\n",line,line+6);
-        write(fd,"PRIVMSG %s :PONG! w00t!\r\n",DEBUG,28);
+        write(fds[i],"PRIVMSG %s :PONG! w00t!\r\n",DEBUG,28);
  #endif
        } else if(!strncmp(line,"ERROR",5)) {
  #ifdef DEBUG
@@ -121,7 +128,7 @@ int runem(int *fds,void (*line_handler)(),void (*extra_handler)()) {
  #endif
         return 0;
        } else {
-        line_handler(fd,line);
+        line_handler(fds[i],line);
        }
        free(line);
       }
@@ -130,8 +137,8 @@ int runem(int *fds,void (*line_handler)(),void (*extra_handler)()) {
      if(s > bllen) { //if the ending position is after the size of the backlog...
       bllen=0;//fuck shifting. :P
      } else {
-      for(i=s;i<=bllen;i++) {//should work.
-       backlog[i-s]=backlog[i];
+      for(j=s;j<=bllen;j++) {//should work.
+       backlogs[i][j-s]=backlogs[i][j];
       }
       bllen-=s;
      }
@@ -147,7 +154,7 @@ int runit(int fd,void (*line_handler)(),void (*extra_handler)()) {
  int fds[2];
  fds[0]=fd;
  fds[1]=-1;
- runem(fds,line_handler,extra_handler);
+ return runem(fds,line_handler,extra_handler);
 }
 
 //not needed?
