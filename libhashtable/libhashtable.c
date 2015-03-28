@@ -129,32 +129,37 @@ int ht_setkey(struct hashtable *ht,char *key,void *value) {
  return 0;
 }
 
-struct entry *ll_getentry(struct entry *start,char *msg) {
+struct entry *ll_getentry(struct entry *start,char *key) {
  struct entry *m;
- if(!msg) return NULL;
+ if(!key) return NULL;
  if(!start) return NULL;
  for(m=start;m;m=m->next) {
-  if(!strncmp(msg,m->original,strlen(m->original)) && (msg[strlen(m->original)]==' ' || msg[strlen(m->original)] == 0)) {//this allows !c to get called when using !c2 if !c2 is defined after !c. >_>
+  if(!strncmp(key,m->original,strlen(m->original)) && (key[strlen(m->original)]==' ' || key[strlen(m->original)] == 0)) {//this allows !c to get called when using !c2 if !c2 is defined after !c. >_>
    return m;
   }
  }
  return NULL;
 }
 
-//returns the linked list at the key.
+//returns the table entry (a linked list) at the key.
 struct entry *ht_getentry(struct hashtable *ht,char *key) {
  unsigned short h=hash(key);
  if(!ht->bucket[h]) return NULL;
  return ht->bucket[h]->ll;
 }
 
-//returns the node
-struct entry *ht_getnode(struct hashtable *ht,char *msg) {
- return ll_getentry(ht_getentry(ht,msg),msg);
+//returns the node in the linked list in the table entry that matches the key.
+struct entry *ht_getnode(struct hashtable *ht,char *key) {
+ return ll_getentry(ht_getentry(ht,key),key);
 }
 
 //you'll probably want to use me.
-void *ht_getvalue(struct hashtable *ht,char *msg) {
- struct entry *tmp=ll_getentry(ht_getentry(ht,msg),msg);
+void *ht_getvalue(struct hashtable *ht,char *key) {
+ struct entry *tmp=ll_getentry(ht_getentry(ht,key),key);
  return tmp?tmp->target:0;
+}
+
+//delete the node in the linked list in the table entry that matches the key.
+void *ht_delete(struct hashtable *ht,char *key) {
+ ll_delete(ht_getentry(ht,key));
 }

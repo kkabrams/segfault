@@ -1056,9 +1056,16 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
 }
 
 void line_handler(int fd,char *line) {//this should be built into the libary?
- char *s=line,*t=0,*u=0;
  char tmp[512];
  struct user *user=malloc(sizeof(struct user));
+ if(recording_raw) {
+  append_file(fd,"epoch",RAWLOG,line,'\n');
+ }
+ //line will be mangled by the cutter.
+ char **a=line_cutter(fd,line,user);
+
+//stuff covered by line_cutter below here.
+/*
  user->nick=0;
  user->user=0;
  user->host=0;
@@ -1072,9 +1079,6 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  //only sub-parse nickuserhost stuff if starts with :
  //strchr doesn't like null pointers. :/ why not just take them and return null?
  //check that I haven't gone past the end of the string? nah. it should take care of itself.
- if(recording_raw) {
-  append_file(fd,"epoch",RAWLOG,line,'\n');
- }
  if(line[0]==':') {
   if((user->nick=strchr(line,':'))) {
    *(user->nick)=0;
@@ -1105,22 +1109,19 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    user->host=user->nick;
   }
  }
- 
- printf("<%s!%s@%s> '%s' '%s' '%s'\n",
-        user->nick,
-        user->user,
-        user->host,
-        s,t,u);
- if(!user->user && s) { //server message
+*/
+//end of stuff covered by line_cutter
+ if(!user->user && a[0]) { //server message
 //:armitage.hacking.allowed.org 353 asdf = #default :@SegFault @FreeArtMan @foobaz @wall @Lamb3_13 @gizmore @blackh0le
   strcpy(tmp,"!");
-  strcat(tmp,s);
+  strcat(tmp,a[0]);
   if(ht_getnode(&alias,tmp) == NULL && ht_getnode(&alias,"!###") != NULL) {
    strcpy(tmp,"!###");
+//   privmsg(fd,*a[1]=='#'?a[1]:user->nick,a[0]);
   }
   if(ht_getnode(&alias,tmp) != NULL) {
    strcat(tmp," ");
-   strcat(tmp,u);//lol. fixme later.
+   strcat(tmp,a[2]);//lol. fixme.
    user->nick=strdup("epoch");
    user->user=strdup("epoch");
    user->host=strdup("localhost");
@@ -1130,37 +1131,38 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    free(user->host);
   }
  }
- if(s && t && u) {
-  if(!strcmp(s,"PRIVMSG") && strcmp(user->nick,myuser->nick)) {
+ if(a[0] && a[1] && a[2]) {
+  if(!strcmp(a[0],"PRIVMSG") && strcmp(user->nick,myuser->nick)) {
    if(strcmp(user->nick,myuser->nick)) {
-    message_handler(fd,*t=='#'?t:user->nick,user,++u,0);
+    message_handler(fd,*a[1]=='#'?a[1]:user->nick,user,++a[2],0);
    }
    else {
-    if(debug) privmsg(fd,*t=='#'?t:user->nick,"This server has an echo");
+    if(debug) privmsg(fd,*a[2]=='#'?a[2]:user->nick,"This server has an echo");
    }
   }
  }
- if(s && user->nick && t) {
-  if(!strcmp(s,"JOIN")) {
-   irc_mode(fd,t+(*t==':'),"+o",user->nick);//sometimes t will start with a : This check should go into the parser up there.
+ if(a[0] && user->nick && a[1]) {
+  if(!strcmp(a[0],"JOIN")) {
+   irc_mode(fd,a[1],"+o",user->nick);
   }
-  if(!strcmp(s,"MODE") && mode_magic) {
-   if(u) {
-    if(*u == '-') {//auto-give modes back that are removed in front of segfault.
-     *u='+';
-     irc_mode(fd,t,u,"");//u contains the nick the mode is being removed from.
+  if(!strcmp(a[0],"MODE") && mode_magic) {
+   if(a[2]) {
+    if(*a[2] == '-') {//auto-give modes back that are removed in front of segfault.
+     *a[2]='+';
+     irc_mode(fd,a[1],a[2],"");
     }
    }
   }
-  if(!strcmp(s,"NICK") && t) {
+  if(!strcmp(a[0],"NICK") && a[1]) {
    if(!strcmp(user->nick,myuser->nick)) {
     free(myuser->nick);
-    if(!t) exit(79);
-    if(!(myuser->nick=strdup(t+1))) exit(179);
+    if(!a[1]) exit(79);
+    if(!(myuser->nick=strdup(a[1]))) exit(179);
    }
   }
  }
  free(user);
+ free(a);
 }
 
 int main(int argc,char *argv[]) {
