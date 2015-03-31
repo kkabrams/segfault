@@ -12,8 +12,8 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 
-#include "libirc/irc.h" //epoch's libirc. should be included with segfault.
-#include "libhashtable/hashtable.h" //epoch's also.
+#include <irc.h>
+#include <hashtable.h>
 
 /*// just in case your system doesn't have strndup
 char *strndup(char *s,int l) {
@@ -75,12 +75,6 @@ union hack {
 };
 
 void (*func)(int fd,...);
-
-struct user {
- char *nick;
- char *user;
- char *host;
-};
 
 struct tail {
  FILE *fp;
@@ -170,13 +164,12 @@ void privmsg(int fd,char *who,char *msg) {
 //try to shorten this up sometime...
 char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg) {
  int i=0,j=1,sz=0,c=1;
- char overflow_space[100];
  char *output,*fmt,*argCopy;
  char **args,**notargs;
  char *argN[10],randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
  if(!arg) arg="%s";
  if(!(argCopy=strdup(arg))) return 0;
- for(argN[0]=argCopy;argCopy[i];i++) {
+ for(argN[0]=argCopy;argCopy[i] && i<10;i++) {
   if(argCopy[i] == ' ') {
    argN[j]=argCopy+i;
    argN[j][0]=0;
@@ -187,14 +180,21 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  for(;j<10;j++) {
   argN[j]="(null)";//fill up the rest to prevent null deref.
  }
- if(!orig_fmt) exit(70);
+ if(!orig_fmt) return 0;
  if(!(fmt=strdup(orig_fmt))) return 0;
- for(i=0;fmt[i];i++)
-  if(fmt[i] == '%')
-   switch(fmt[++i])
+ for(i=0;fmt[i];i++) {
+  if(fmt[i] == '%') {
+   i++;
+   switch(fmt[i]) {
      case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
      case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
-     case '5':case '6':case '7':case '8':case '9':case 'r': c++;
+     case '5':case '6':case '7':case '8':case '9':case 'r':
+       c++;
+     default:
+       break;
+   }
+  }
+ }
  args=malloc((sizeof(char *)) * (c + 1));
  notargs=malloc((sizeof(char *)) * (c + 2));
  c=0;
@@ -205,14 +205,14 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
      case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
      case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
      case '5':case '6':case '7':case '8':case '9':case 'r':
-      args[c]=((fmt[i]=='n')?user->nick:
-               ((fmt[i]=='u')?user->user:
+      args[c]=((fmt[i]=='n')?(user->nick?user->nick:"user->nick"):
+               ((fmt[i]=='u')?(user->user?user->user:"user->user"):
                 ((fmt[i]=='~')?seghome:
-                 ((fmt[i]=='h')?user->host:
-                  ((fmt[i]=='f')?from:
+                 ((fmt[i]=='h')?(user->host?user->host:"user->host"):
+                  ((fmt[i]=='f')?(from?from:"from"):
                    ((fmt[i]=='p')?pid:
-                    ((fmt[i]=='m')?myuser->nick://and here.
-                     ((fmt[i]=='s')?arg:
+                    ((fmt[i]=='m')?(myuser->nick?myuser->nick:"myuser->nick")://and here.
+                     ((fmt[i]=='s')?(arg?arg:"arg"):
                       ((fmt[i]=='0')?argN[0]:
                        ((fmt[i]=='1')?argN[1]:
                         ((fmt[i]=='2')?argN[2]:
@@ -228,6 +228,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
       fmt[i-1]=0;
       if(!(fmt+j)) exit(68);
       if(!(notargs[c]=strdup(fmt+j))) exit(66);
+      if(!args[c]) exit(200+c);
       sz+=strlen(args[c]);
       sz+=strlen(notargs[c]);
       c++;
@@ -272,12 +273,12 @@ void extra_handler(int fd) {
  int tmpo,i;
  char tmp[BS+1];
  char *tmp2;
- if(oldtime == time(0) && lines_sent > LINES_SENT_LIMIT) {//if it is still the same second, skip this function.
-  return;
- } else {
-  lines_sent=0;
- }
- oldtime=time(0);//this might fix it?
+ //if(oldtime == time(0) && lines_sent > LINES_SENT_LIMIT) {//if it is still the same second, skip this function.
+ // return;
+ //} else {
+ // lines_sent=0;
+ //}
+ //oldtime=time(0);//this might fix it?
  if(redirect_to_fd != -1) {
   fd=redirect_to_fd;
  }
@@ -1016,13 +1017,13 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   *args=0;
   args++;
  }
- if(!strncmp(command,"lambda",6)) {
+ while(!strncmp(command,"lambda",6)) {
   command+=8;
   if((args=strchr(command,' '))) {
    *args=0;
    args++;
   }
-  args=format_magic(fd,from,user,args,":/");
+  args=format_magic(fd,from,user,args,args);
   lambdad=1;
  }
  if((lol.data=ht_getvalue(&builtin,command))) {
@@ -1063,54 +1064,6 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  }
  //line will be mangled by the cutter.
  char **a=line_cutter(fd,line,user);
-
-//stuff covered by line_cutter below here.
-/*
- user->nick=0;
- user->user=0;
- user->host=0;
- if(strchr(line,'\r')) *strchr(line,'\r')=0;
- if(strchr(line,'\n')) *strchr(line,'\n')=0;
- printf("line: '%s'\n",line);
- //:nick!user@host MERP DERP :message
- //:nick!user@host s t :u
- //:armitage.hacking.allowed.org MERP DERP :message
- //:nickhost s t :u
- //only sub-parse nickuserhost stuff if starts with :
- //strchr doesn't like null pointers. :/ why not just take them and return null?
- //check that I haven't gone past the end of the string? nah. it should take care of itself.
- if(line[0]==':') {
-  if((user->nick=strchr(line,':'))) {
-   *(user->nick)=0;
-   (user->nick)++;
-  }
- }
- if(user->nick) {
-  if((s=strchr((user->nick),' '))) {
-   *s=0;
-   s++;
-   if((t=strchr(s,' '))) {
-    *t=0;
-    t++;
-    if((u=strchr(t,' '))) {//:
-     *u=0;
-     u++;
-    }
-   }
-  }
-  if(((user->user)=strchr((user->nick),'!'))) {
-   *(user->user)=0;
-   (user->user)++;
-   if(((user->host)=strchr((user->user),'@'))) {
-    *(user->host)=0;
-    (user->host)++;
-   }
-  } else {
-   user->host=user->nick;
-  }
- }
-*/
-//end of stuff covered by line_cutter
  if(!user->user && a[0]) { //server message
 //:armitage.hacking.allowed.org 353 asdf = #default :@SegFault @FreeArtMan @foobaz @wall @Lamb3_13 @gizmore @blackh0le
   strcpy(tmp,"!");
@@ -1134,7 +1087,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  if(a[0] && a[1] && a[2]) {
   if(!strcmp(a[0],"PRIVMSG") && strcmp(user->nick,myuser->nick)) {
    if(strcmp(user->nick,myuser->nick)) {
-    message_handler(fd,*a[1]=='#'?a[1]:user->nick,user,++a[2],0);
+    message_handler(fd,*a[1]=='#'?a[1]:user->nick,user,a[2],0);
    }
    else {
     if(debug) privmsg(fd,*a[2]=='#'?a[2]:user->nick,"This server has an echo");
