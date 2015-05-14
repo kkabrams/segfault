@@ -1,4 +1,4 @@
-LDFLAGS=-lirc -Llibirc -lhashtable -Llibhashtable
+LDFLAGS=-lirc -lhashtable
 CFLAGS=-std=c99 -pedantic -Wall
 
 all:

@@ -1035,8 +1035,8 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   debug_time(fd,from,"checking aliases...");
   command--;// :>
   if((m=ht_getnode(&alias,command)) != NULL) {
-   sz=(strlen(msg)-strlen(m->original)+strlen(m->target)+1);
-   redo=format_magic(fd,from,user,m->target,*(msg+strlen(m->original)+1)=='\n'?"":(msg+strlen(m->original)+1));
+   sz=(strlen(command)-strlen(m->original)+strlen(m->target)+1);
+   redo=format_magic(fd,from,user,m->target,*(command+strlen(m->original)+1)=='\n'?"":(command+strlen(m->original)+1));
    message_handler(fd,from,user,redo,redones+1);
    free(redo);
    redo=0;
@@ -1062,6 +1062,9 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  if(recording_raw) {
   append_file(fd,"epoch",RAWLOG,line,'\n');
  }
+ char *line2=strdup(line);
+ char *line3;
+ struct entry *tmp2;
  //line will be mangled by the cutter.
  char **a=line_cutter(fd,line,user);
  if(!user->user && a[0]) { //server message
@@ -1072,18 +1075,19 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    strcpy(tmp,"!###");
 //   privmsg(fd,*a[1]=='#'?a[1]:user->nick,a[0]);
   }
-  if(ht_getnode(&alias,tmp) != NULL) {
+  if((tmp2=ht_getnode(&alias,tmp)) != NULL) {
    strcat(tmp," ");
-   strcat(tmp,a[2]);//lol. fixme.
    user->nick=strdup("epoch");
    user->user=strdup("epoch");
    user->host=strdup("localhost");
+   strcat(tmp,line2);
    message_handler(fd,"#cmd",user,tmp,1);
    free(user->nick);
    free(user->user);
    free(user->host);
   }
  }
+ free(line2);
  if(a[0] && a[1] && a[2]) {
   if(!strcmp(a[0],"PRIVMSG") && strcmp(user->nick,myuser->nick)) {
    if(strcmp(user->nick,myuser->nick)) {
