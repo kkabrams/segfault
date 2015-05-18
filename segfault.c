@@ -560,6 +560,7 @@ void c_builtin(int fd,char *from,char *line,...) {
 
 void c_builtins(int fd,char *from,char *line,...) {
  char tmp[512];
+ struct hitem *hi;
  struct entry *m;
  int i,j=0,k=0;
  if(!line){
@@ -571,13 +572,18 @@ void c_builtins(int fd,char *from,char *line,...) {
    snprintf(tmp,sizeof(tmp)-1,"builtins in bucket: %d",builtin.keys[i]);
    privmsg(fd,from,tmp);
   }
-  for(m=builtin.bucket[builtin.keys[i]]->ll;m;m=m->next) {
-   if(strcasestr(m->original,line) || *line=='*') {
-    snprintf(tmp,sizeof(tmp)-1," %s -> %p",m->original,m->target);
-    privmsg(fd,from,tmp);
-    j++;
+  hi=builtin.bucket[builtin.keys[i]];
+  if(hi) {
+   for(m=builtin.bucket[builtin.keys[i]]->ll;m;m=m->next) {
+    if(strcasestr(m->original,line) || *line=='*') {
+     snprintf(tmp,sizeof(tmp)-1," %s -> %p",m->original,m->target);
+     privmsg(fd,from,tmp);
+     j++;
+    }
+    k++;
    }
-   k++;
+  } else {
+   privmsg(fd,from,"what the fuck? this bucket isn't set!");
   }
  }
  snprintf(tmp,sizeof(tmp)-1,"found %d of %d in builtins",j,k);
