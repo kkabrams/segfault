@@ -161,6 +161,48 @@ void privmsg(int fd,char *who,char *msg) {
  }
 }
 
+char *esca(char *s,char *r) {
+ char *t;
+ int l=0;
+ char *u;
+ for(t=s;*t;t++) if(strchr(r,*t)) l++;
+ l+=strlen(s)+1;
+ t=malloc(l);
+ for(u=t;*s;s++) {
+  if(strchr(r,*s)) {
+   *u='\\';
+   u++;
+  }
+  *u=*s;
+  u++;
+ }
+ *u=0;//null it off
+ return t;
+}
+
+char *escahack(char *s) {//for single quotes
+ char *t;
+ int l=0;
+ char *u;
+ for(t=s;*t;t++) if(*t == '\'') l+=3;
+ l+=strlen(s)+1;
+ t=malloc(l);
+ for(u=t;*s;s++) {
+  if(*s == '\'') {
+   *u='\'';
+   u++;
+   *u='\\';
+   u++;
+   *u='\'';
+   u++;
+  }
+  *u=*s;
+  u++;
+ }
+ *u=0;//null it off
+ return t;
+}
+
 //try to shorten this up sometime...
 char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg) {
  int i=0,j=1,sz=0,c=1;
@@ -188,7 +230,8 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    switch(fmt[i]) {
      case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
      case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
-     case '5':case '6':case '7':case '8':case '9':case 'r':
+     case '5':case '6':case '7':case '8':case '9':case 'r':case 'q':
+     case 'Q':
        c++;
      default:
        break;
@@ -204,7 +247,8 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    switch(fmt[i]) {
      case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
      case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
-     case '5':case '6':case '7':case '8':case '9':case 'r':
+     case '5':case '6':case '7':case '8':case '9':case 'r':case 'q':
+     case 'Q':
       args[c]=((fmt[i]=='n')?(user->nick?user->nick:"user->nick"):
                ((fmt[i]=='u')?(user->user?user->user:"user->user"):
                 ((fmt[i]=='~')?seghome:
@@ -223,8 +267,10 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
              /* this,     */ ((fmt[i]=='7')?argN[7]:
              /* dontcha? :)*/ ((fmt[i]=='8')?argN[8]:
                                ((fmt[i]=='9')?argN[9]:
-                                ((fmt[i]=='r')?randC[rand()%10]:"%"
-              )))))))))))))))))));
+                                ((fmt[i]=='r')?randC[rand()%10]:
+                                 ((fmt[i]=='q')?(arg?escahack(arg):"escarg"):
+                                  ((fmt[i]=='Q')?(arg?esca(arg,"\""):"escarg"):"%"
+              )))))))))))))))))))));
       fmt[i-1]=0;
       if(!(fmt+j)) exit(68);
       if(!(notargs[c]=strdup(fmt+j))) exit(66);
@@ -607,6 +653,8 @@ void c_aliases_h(int fd,char *from,char *line,...) {
  struct entry *m;
  int i,j=0,k=0;
  if(!line){
+  snprintf(tmp,sizeof(tmp)-1,"There are %d aliases in this bot's hash table.",alias.kl);
+  privmsg(fd,from,tmp);
   privmsg(fd,from,"usage: !aliases [search-term]");
   return;
  }
@@ -646,9 +694,7 @@ void c_alias_h(int fd,char *from,char *line,...) {
  }
  *derp=0;
  derp++;
- if((tmp=ht_getnode(&alias,line))) {
-  free(tmp->target);
- }
+ if((tmp=ht_getnode(&alias,line))) free(tmp->target);
  if(!derp) exit(77);
  ht_setkey(&alias,line,strdup(derp));
 }
@@ -1130,6 +1176,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
 
 int main(int argc,char *argv[]) {
  int fd;
+ srand(time(0) * getpid());
  struct passwd *pwd;
  struct rlimit nofile;
  char *s,*p;
@@ -1187,7 +1234,7 @@ int main(int argc,char *argv[]) {
  if(!getuid() || !geteuid()) {
   s=getenv("seguser");
   pwd=getpwnam(s?s:MYUSER);
-  if(!pwd) { printf("I'm running with euid or uid of 0 and I can't find myself."); return 0; }
+  if(!pwd) { printf("I'm running with euid or uid of 0 and I can't find myself.\n"); return 0; }
   setgroups(0,0);
   setgid(pwd->pw_gid);
   setuid(pwd->pw_uid);
@@ -1209,5 +1256,6 @@ int main(int argc,char *argv[]) {
  chdir(getenv("seghome")?getenv("seghome"):pwd->pw_dir);
  getcwd(seghome,SEGHOMELEN);
  prestartup_stuff(fd);
+ if(fd == -1) return 0;
  return runit(fd,line_handler,extra_handler);
 }
