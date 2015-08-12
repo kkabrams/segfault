@@ -15,6 +15,8 @@
 #include <irc.h>
 #include <hashtable.h>
 
+#define free(a) printf("freeing %p\n",a);if(a)free(a)
+
 /*// just in case your system doesn't have strndup
 char *strndup(char *s,int l) {
  char *r=strdup(s);
@@ -211,7 +213,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  char *argN[10],randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
  if(!arg) arg="%s";
  if(!(argCopy=strdup(arg))) return 0;
- for(argN[0]=argCopy;argCopy[i] && i<10;i++) {
+ for(argN[0]=argCopy;argCopy[i] && j<10;i++) {
   if(argCopy[i] == ' ') {
    argN[j]=argCopy+i;
    argN[j][0]=0;
@@ -430,7 +432,7 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   if(tailf[i].to) {
    snprintf(tmp,sizeof(tmp),"tailf[%d].to: %s from: %s",i,tailf[i].to,from);
    privmsg(fd,"#default",tmp);
-   free(tailf[i].to); //commenting this out stopped a buffer overflow. >_> weird.
+   //free(tailf[i].to); //commenting this out stopped a buffer overflow. >_> weird.
    tailf[i].to=0;
   }
   tailf[i].to=strdup(from);//if this properly free()d before being assigned to?
@@ -598,7 +600,7 @@ void c_builtin(int fd,char *from,char *line,...) {
   ht_setkey(&builtin,function,(void *)address);
  } else {
   address=(unsigned int)ht_getvalue(&builtin,function);
-  snprintf(tmp,sizeof(tmp)-1,"builtin %s's address: %x",function,address);
+  snprintf(tmp,sizeof(tmp)-1,"builtin %s's address: %08x",function,address);
   privmsg(fd,from,tmp);
  }
  return;
@@ -610,6 +612,8 @@ void c_builtins(int fd,char *from,char *line,...) {
  struct entry *m;
  int i,j=0,k=0;
  if(!line){
+  snprintf(tmp,sizeof(tmp),"There are %d builtins in this bot's hash table.",builtin.kl);
+  privmsg(fd,from,tmp);
   privmsg(fd,from,"usage: !builtins [search-term]");
   return;
  }
@@ -620,7 +624,7 @@ void c_builtins(int fd,char *from,char *line,...) {
   }
   hi=builtin.bucket[builtin.keys[i]];
   if(hi) {
-   for(m=builtin.bucket[builtin.keys[i]]->ll;m;m=m->next) {
+   for(m=hi->ll;m;m=m->next) {
     if(strcasestr(m->original,line) || *line=='*') {
      snprintf(tmp,sizeof(tmp)-1," %s -> %p",m->original,m->target);
      privmsg(fd,from,tmp);
@@ -651,6 +655,7 @@ void c_lobotomy(int fd,char *from,...) {//forget builtins
 void c_aliases_h(int fd,char *from,char *line,...) {
  char tmp[512];
  struct entry *m;
+ struct hitem *hi;
  int i,j=0,k=0;
  if(!line){
   snprintf(tmp,sizeof(tmp)-1,"There are %d aliases in this bot's hash table.",alias.kl);
@@ -658,16 +663,20 @@ void c_aliases_h(int fd,char *from,char *line,...) {
   privmsg(fd,from,"usage: !aliases [search-term]");
   return;
  }
+ 
  for(i=0;i<alias.kl;i++) {
-  //snprintf(tmp,sizeof(tmp)-1,"aliases in bucket: %d",alias->keys[i]);
-  //privmsg(fd,from,tmp);
-  for(m=alias.bucket[alias.keys[i]]->ll;m;m=m->next) {
-   if(strcasestr(m->target,line) || strcasestr(m->original,line)) {
-    snprintf(tmp,sizeof(tmp)-1," %s -> %s",m->original,(char *)m->target);
-    privmsg(fd,from,tmp);
-    j++;
+  hi=alias.bucket[alias.keys[i]];
+  if(hi) {
+   for(m=hi->ll;m;m=m->next) {
+    if(strcasestr(m->target,line) || strcasestr(m->original,line)) {
+     snprintf(tmp,sizeof(tmp)-1," %s -> %s",m->original,(char *)m->target);
+     privmsg(fd,from,tmp);
+     j++;
+    }
+    k++;
    }
-   k++;
+  } else {
+   privmsg(fd,"#default","holy shit. epoch found that bug.\n");
   }
  }
  snprintf(tmp,sizeof(tmp)-1,"found %d of %d aliases",j,k);
@@ -694,7 +703,9 @@ void c_alias_h(int fd,char *from,char *line,...) {
  }
  *derp=0;
  derp++;
- if((tmp=ht_getnode(&alias,line))) free(tmp->target);
+ if((tmp=ht_getnode(&alias,line))) {
+  free(tmp->target);
+ }
  if(!derp) exit(77);
  ht_setkey(&alias,line,strdup(derp));
 }
@@ -1043,7 +1054,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   debug_time(fd,from,"finished writing to log.");
  }
  len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(myuser->nick);
- if(!strncmp(msg,myuser->nick,len)) {
+ if(!strncasecmp(msg,myuser->nick,len)) {
   if(msg[len] == '*') len++;
   if(msg[len] == ',' || msg[len] == ':') {
    if(msg[len+1] == ' ') {
@@ -1058,6 +1069,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  //}
  if(!msg) exit(71);
  oldcommand=strdup(msg);
+ if(!oldcommand) exit(72);
  command=oldcommand;
  if(*command == trigger_char) {
   command++;
@@ -1086,9 +1098,11 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  else if(redones < 5) {
   debug_time(fd,from,"checking aliases...");
   command--;// :>
-  if((m=ht_getnode(&alias,command)) != NULL) {
+  if((m=ht_getnode(&alias,command))) {
    sz=(strlen(command)-strlen(m->original)+strlen(m->target)+1);
-   redo=format_magic(fd,from,user,m->target,*(command+strlen(m->original)+1)=='\n'?"":(command+strlen(m->original)+1));
+//??? why not use args?
+   redo=format_magic(fd,from,user,m->target,(command+strlen(m->original)+1));
+//   redo=format_magic(fd,from,user,m->target,args);
    message_handler(fd,from,user,redo,redones+1);
    free(redo);
    redo=0;
@@ -1155,10 +1169,24 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    irc_mode(fd,a[1],"+o",user->nick);
   }
   if(!strcmp(a[0],"MODE") && mode_magic) {
-   if(a[2]) {
-    if(*a[2] == '-') {//auto-give modes back that are removed in front of segfault.
-     *a[2]='+';
-     irc_mode(fd,a[1],a[2],"");
+   if(strcmp(user->nick,myuser->nick)) {
+    if(a[2]) {
+     if(*a[2] == '-') {//auto-give modes back that are removed in front of segfault.
+      *a[2]='+';
+      irc_mode(fd,a[1],a[2],a[3]?a[3]:"");
+     }
+     else if(*a[2] == '+' && a[2][1] == 'b') {//only remove bans.
+      *a[2]='-';
+      irc_mode(fd,a[1],a[2],a[3]?a[3]:"");
+     }
+    }
+   }
+   if(!strcmp(user->nick,myuser->nick)) {//if someone is making me set a mode and I see it.
+    if(a[2]) {
+     if(*a[2] == '+' && a[2][1] == 'b') {//segfault doesn't ban.
+      *a[2]='-';
+      irc_mode(fd,a[1],a[2],a[3]?a[3]:"");
+     }
     }
    }
   }
@@ -1207,7 +1235,7 @@ int main(int argc,char *argv[]) {
  BUILDIN("aliases",c_aliases_h);
  BUILDIN("lobotomy",c_lobotomy);
  BUILDIN("amnesia",c_amnesia);
- mode_magic=0;
+ mode_magic=1;
  trigger_char='!';
  redirect_to_fd=-1;
  debug=0;
