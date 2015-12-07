@@ -15,7 +15,7 @@
 #include <irc.h>
 #include <hashtable.h>
 
-#define free(a) printf("freeing %p\n",a);if(a)free(a)
+#define free(a) do{printf("freeing %p line:%d\n",a,__LINE__);if(a) free(a);}while(0);
 
 /*// just in case your system doesn't have strndup
 char *strndup(char *s,int l) {
@@ -362,9 +362,17 @@ void extra_handler(int fd) {
      if(strchr(tmp,'\r')) *strchr(tmp,'\r')=0;
      if(strchr(tmp,'\n')) *strchr(tmp,'\n')=0;
      if(tailf[i].opt & TAILO_EVAL) {//eval
-      tmp2=tailf[i].opt&TAILO_FORMAT?format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args):strdup(tmp);
-      message_handler(fd,tailf[i].to,tailf[i].user,tmp2,0);
-      free(tmp2);
+      if(tailf[i].opt & TAILO_FORMAT) {
+       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);
+       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,0);
+       free(tmp2);
+      } else {
+       //this will crash.
+       tmp2=strdup(tmp);
+       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,0);
+       printf("tmp2 in crashing place: %p\n",tmp2);
+      }
+      printf("OHAI. WE SURVIVED!\n");
      }
      if(tailf[i].opt & TAILO_RAW) {//raw
       tmp2=malloc(strlen(tmp)+4);
@@ -432,7 +440,7 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   if(tailf[i].to) {
    snprintf(tmp,sizeof(tmp),"tailf[%d].to: %s from: %s",i,tailf[i].to,from);
    privmsg(fd,"#default",tmp);
-   //free(tailf[i].to); //commenting this out stopped a buffer overflow. >_> weird.
+   free(tailf[i].to); //commenting this out stopped a buffer overflow. >_> weird.
    tailf[i].to=0;
   }
   tailf[i].to=strdup(from);//if this properly free()d before being assigned to?
@@ -448,10 +456,11 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   }
   tailf[i].opt=opt;
   tailf[i].inode=st.st_ino;
-  tailf[i].user=malloc(sizeof(struct user));
-  tailf[i].user->nick=strdup(user->nick);
-  tailf[i].user->user=strdup(user->user);
-  tailf[i].user->host=strdup(user->host);
+  if(!(tailf[i].user=malloc(sizeof(struct user)))) exit(__LINE__);
+  
+  if(!(tailf[i].user->nick=strdup(user->nick))) exit(__LINE__);
+  if(!(tailf[i].user->user=strdup(user->user))) exit(__LINE__);
+  if(!(tailf[i].user->host=strdup(user->host))) exit(__LINE__);
   if(!tailf[i].user) {
    mywrite(fd,"QUIT :malloc error 4.5!!! (a strdup again)\r\n");
    return;
@@ -690,6 +699,7 @@ void c_alias_h(int fd,char *from,char *line,...) {
   return;
  }
  char *derp=strchr(line,' ');
+//why is this using entry? it should be hitem?
  struct entry *tmp;
  if(!derp) {
   if((tmp=ht_getnode(&alias,line)) != NULL) {
@@ -707,6 +717,7 @@ void c_alias_h(int fd,char *from,char *line,...) {
   free(tmp->target);
  }
  if(!derp) exit(77);
+ if(!*derp) exit(78);
  ht_setkey(&alias,line,strdup(derp));
 }
 
@@ -1031,17 +1042,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  char *tmp2;
  int len;
  int sz;
- //privmsg(fd,"#debug",msg);
- //debug_time(fd,from);
- if(user->nick) {
-  if(strcmp(user->nick,myuser->nick)) {
-   for(sz=0;shitlist[sz];sz++) {
-    if(!strcmp(shitlist[sz],user->nick)) {
-     return;
-    }
-   }
-  }
- }
+ printf("message_handler: entry: message: '%s' redones: %d\n",msg,redones);
  if(redirect_to_fd != -1) {
   fd=redirect_to_fd;
  }
@@ -1063,19 +1064,19 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    }
   }
  }
- //if(*msg == trigger_char) *msg='!';
- //if(*msg != '!') {
- // return;
- //}
  if(!msg) exit(71);
  oldcommand=strdup(msg);
  if(!oldcommand) exit(72);
  command=oldcommand;
- if(*command == trigger_char) {
-  command++;
- } else {
-  free(oldcommand);
-  return;
+ if(*command == '\x01') {
+  command[strlen(command)-1]=0;
+  *command=trigger_char;//there's some -- magic later that might use this value.
+ }
+ if(*command == trigger_char) command++;
+ else {
+   free(oldcommand);
+   printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
+   return;
  }
  if((args=strchr(command,' '))) {
   *args=0;
@@ -1093,13 +1094,15 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  if((lol.data=ht_getvalue(&builtin,command))) {
   func=lol.func;
   func(fd,from,args,user);
-  if(lambdad) {free(args);}
+//  if(lambdad) {
+//   free(args);
+//  }
  }
  else if(redones < 5) {
   debug_time(fd,from,"checking aliases...");
   command--;// :>
   if((m=ht_getnode(&alias,command))) {
-   sz=(strlen(command)-strlen(m->original)+strlen(m->target)+1);
+   //sz=(strlen(command)-strlen(m->original)+strlen(m->target)+1);// what is this used for?
 //??? why not use args?
    redo=format_magic(fd,from,user,m->target,(command+strlen(m->original)+1));
 //   redo=format_magic(fd,from,user,m->target,args);
@@ -1107,9 +1110,24 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    free(redo);
    redo=0;
    free(oldcommand);
+   printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
    return;
   }
   debug_time(fd,from,"finished checking aliases. not found.");
+  if((m=ht_getnode(&alias,"!chat"))) {
+   if(args) command[strlen(command)]=' ';//turn that null into a space!
+   command++;// :>
+   if(debug) {
+    snprintf(tmp,sizeof(tmp)-1,"using defualt command! '%s' with args '%s'","!chat",command);
+    privmsg(fd,from,tmp);
+   }
+   //redo=format_magic(fd,from,user,"!chat",command);
+   sz=(strlen("!chat")+strlen(command)+1);
+   redo=malloc(sz+1);
+   snprintf(redo,sz,"%s %s","!chat",command);
+   message_handler(fd,from,user,redo,redones+1);
+   free(redo);
+  }
   redo=0;
   if(debug) {
    snprintf(tmp,sizeof(tmp)-1,"command not found: '%s' with args '%s'",command,args);
@@ -1120,11 +1138,13 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   privmsg(fd,from,"I don't know if I'll ever get out of this alias hole you're telling me to dig. Fuck this.");
  }
  free(oldcommand);
+ printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
 }
 
 void line_handler(int fd,char *line) {//this should be built into the libary?
  char tmp[512];
- struct user *user=malloc(sizeof(struct user));
+ struct user *user;
+ if(!(user=malloc(sizeof(struct user)))) exit(__LINE__);
  if(recording_raw) {
   append_file(fd,"epoch",RAWLOG,line,'\n');
  }
@@ -1143,9 +1163,9 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
   if((tmp2=ht_getnode(&alias,tmp)) != NULL) {
    strcat(tmp," ");
-   user->nick=strdup("epoch");
-   user->user=strdup("epoch");
-   user->host=strdup("localhost");
+   if(!(user->nick=strdup("epoch"))) exit(__LINE__);
+   if(!(user->user=strdup("epoch"))) exit(__LINE__);
+   if(!(user->host=strdup("localhost"))) exit(__LINE__);
    strcat(tmp,line2);
    message_handler(fd,"#cmd",user,tmp,1);
    free(user->nick);
@@ -1204,7 +1224,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
 
 int main(int argc,char *argv[]) {
  int fd;
- srand(time(0) * getpid());
+ srand(time(0) + getpid());
  struct passwd *pwd;
  struct rlimit nofile;
  char *s,*p;
