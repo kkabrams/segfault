@@ -1,6 +1,8 @@
 LDFLAGS=-lirc -lhashtable
 CFLAGS=-std=c99 -pedantic -Wall
 
+again: clean all
+
 all:
 	$(MAKE) segfault
 
