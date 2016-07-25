@@ -11,11 +11,12 @@
 #include <pwd.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
+#include <signal.h>
 
 #include <irc.h>
 #include <hashtable.h>
 
-#define free(a) do{printf("freeing %p line:%d\n",a,__LINE__);if(a) free(a);}while(0);
+#define free(a) do{printf("freeing %p line:%d\n",(void *)a,__LINE__);if(a) free(a);}while(0);
 
 /*// just in case your system doesn't have strndup
 char *strndup(char *s,int l) {
@@ -55,7 +56,6 @@ char *strndup(char *s,int l) {
 struct user *myuser;
 char pid[6];
 char mode_magic;
-char trigger_char;
 int start_time;
 char *redo;
 int redirect_to_fd;
@@ -978,12 +978,6 @@ void c_linelimit(int fd,char *from,char *msg,...) {
    mode_magic^=1;
    privmsg(fd,from,"mode_magic flipped. happy easter!");
   }
-  if(msg[0]=='!') {
-   if(msg[1]) {
-    trigger_char=msg[1];
-    privmsg(fd,from,"trigger_char set. more easter!");
-   }
-  }
   if(atoi(msg) > 0) {
    line_limit=atoi(msg);
    snprintf(tmp,255,"spam line limit set to: %d",line_limit);
@@ -1054,36 +1048,32 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   free(tmp2);
   debug_time(fd,from,"finished writing to log.");
  }
+
  len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(myuser->nick);
+
  if(!strncasecmp(msg,myuser->nick,len)) {
   if(msg[len] == '*') len++;
   if(msg[len] == ',' || msg[len] == ':') {
    if(msg[len+1] == ' ') {
-    msg+=len+1;
-    msg[0]=trigger_char;
+    msg+=len;
    }
   }
  }
+
  if(!msg) exit(71);
  oldcommand=strdup(msg);
  if(!oldcommand) exit(72);
  command=oldcommand;
  if(*command == '\x01') {
   command[strlen(command)-1]=0;
-  *command=trigger_char;//there's some -- magic later that might use this value.
- }
- if(*command == trigger_char) command++;
- else {
-   free(oldcommand);
-   printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
-   return;
+  command++;
  }
  if((args=strchr(command,' '))) {
   *args=0;
   args++;
  }
  while(!strncmp(command,"lambda",6)) {
-  command+=8;
+  command+=7;
   if((args=strchr(command,' '))) {
    *args=0;
    args++;
@@ -1100,7 +1090,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  }
  else if(redones < 5) {
   debug_time(fd,from,"checking aliases...");
-  command--;// :>
+  //command--;// :>
   if((m=ht_getnode(&alias,command))) {
    //sz=(strlen(command)-strlen(m->original)+strlen(m->target)+1);// what is this used for?
 //??? why not use args?
@@ -1149,7 +1139,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   append_file(fd,"epoch",RAWLOG,line,'\n');
  }
  char *line2=strdup(line);
- char *line3;
+// char *line3;
  struct entry *tmp2;
  //line will be mangled by the cutter.
  char **a=line_cutter(fd,line,user);
@@ -1180,13 +1170,23 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
     message_handler(fd,*a[1]=='#'?a[1]:user->nick,user,a[2],0);
    }
    else {
-    if(debug) privmsg(fd,*a[2]=='#'?a[2]:user->nick,"This server has an echo");
+    if(debug) privmsg(fd,*a[1]=='#'?a[1]:user->nick,"This server has an echo");
    }
   }
  }
  if(a[0] && user->nick && a[1]) {
   if(!strcmp(a[0],"JOIN")) {
    irc_mode(fd,a[1],"+o",user->nick);
+  }
+//  if(!strcmp(a[0],"KICK") && !strcmp(a[2],"epoch") && strcmp(user->nick,myuser->nick)) {
+//   snprintf(tmp,sizeof(tmp)-1,"KILL %s :don't fuck with my bro.\r\n",user->nick);
+//   mywrite(fd,tmp);
+//  }
+  if(!strcmp(a[0],"KICK") && !strcmp(a[2],myuser->nick)) {
+   snprintf(tmp,sizeof(tmp)-1,"JOIN %s\r\n",a[1]);
+   mywrite(fd,tmp);
+//   snprintf(tmp,sizeof(tmp)-1,"KILL %s :don't fuck with me.\r\n",user->nick);
+//   mywrite(fd,tmp);
   }
   if(!strcmp(a[0],"MODE") && mode_magic) {
    if(strcmp(user->nick,myuser->nick)) {
@@ -1223,6 +1223,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
 }
 
 int main(int argc,char *argv[]) {
+ signal(SIGSTOP,exit);
  int fd;
  srand(time(0) + getpid());
  struct passwd *pwd;
@@ -1231,32 +1232,31 @@ int main(int argc,char *argv[]) {
  int c;
  inittable(&builtin,TSIZE);
 #define BUILDIN(a,b) ht_setkey(&builtin,a,(void *)((union hack){(void (*)(int,...))b}.data))
- BUILDIN("builtin",c_builtin);
- BUILDIN("builtins",c_builtins);
- BUILDIN("raw",c_raw);
- BUILDIN("leetsetout",c_leetsetout);
- BUILDIN("resetout",c_resetout);
- BUILDIN("botup",c_botup);
- BUILDIN("linelimit",c_linelimit);
- BUILDIN("nick",c_nick);
- BUILDIN("tailunlock",c_tailunlock);
- BUILDIN("istaillocked",c_istaillocked);
- BUILDIN("changetail",c_changetail);
- BUILDIN("tails",c_tails);
- BUILDIN("record",c_record);
- BUILDIN("rawrecord",c_rawrecord);
- BUILDIN("leettail",c_leettail);
- BUILDIN("leetuntail",c_leetuntail);
- BUILDIN("leetappend",c_leetappend);
- BUILDIN("say",c_say);
- BUILDIN("id",c_id);
- BUILDIN("kill",c_kill);
- BUILDIN("alias",c_alias_h);
- BUILDIN("aliases",c_aliases_h);
- BUILDIN("lobotomy",c_lobotomy);
- BUILDIN("amnesia",c_amnesia);
+ BUILDIN("!builtin",c_builtin);
+ BUILDIN("!builtins",c_builtins);
+ BUILDIN("!raw",c_raw);
+ BUILDIN("!leetsetout",c_leetsetout);
+ BUILDIN("!resetout",c_resetout);
+ BUILDIN("!botup",c_botup);
+ BUILDIN("!linelimit",c_linelimit);
+ BUILDIN("!nick",c_nick);
+ BUILDIN("!tailunlock",c_tailunlock);
+ BUILDIN("!istaillocked",c_istaillocked);
+ BUILDIN("!changetail",c_changetail);
+ BUILDIN("!tails",c_tails);
+ BUILDIN("!record",c_record);
+ BUILDIN("!rawrecord",c_rawrecord);
+ BUILDIN("!leettail",c_leettail);
+ BUILDIN("!leetuntail",c_leetuntail);
+ BUILDIN("!leetappend",c_leetappend);
+ BUILDIN("!say",c_say);
+ BUILDIN("!id",c_id);
+ BUILDIN("!kill",c_kill);
+ BUILDIN("!alias",c_alias_h);
+ BUILDIN("!aliases",c_aliases_h);
+ BUILDIN("!lobotomy",c_lobotomy);
+ BUILDIN("!amnesia",c_amnesia);
  mode_magic=1;
- trigger_char='!';
  redirect_to_fd=-1;
  debug=0;
  lines_sent=0;
