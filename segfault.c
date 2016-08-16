@@ -13,6 +13,7 @@
 #include <sys/resource.h>
 #include <signal.h>
 
+//epoch's libraries.
 #include <irc.h>
 #include <hashtable.h>
 
@@ -207,13 +208,24 @@ char *escahack(char *s) {//for single quotes
 
 //try to shorten this up sometime...
 char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg) {
+ char *magic[256];
  int i=0,j=1,sz=0,c=1;
  char *output,*fmt,*argCopy;
  char **args,**notargs;
  char *argN[10],randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
+ for(i=0;i<256;i++) {
+  magic[i]=0;
+ }
  if(!arg) arg="%s";
  if(!(argCopy=strdup(arg))) return 0;
- for(argN[0]=argCopy;argCopy[i] && j<10;i++) {
+ argN[0]=argCopy;
+ for(j=1;(argCopy=strchr(argCopy,' ')) && j < 10;j++) {
+  *argCopy=0;//null it out!
+  argCopy++;
+  argN[j]=argCopy;
+ }
+/*
+ for(j=1,argN[0]=argCopy;argCopy[i] && j<10;i++) {
   if(argCopy[i] == ' ') {
    argN[j]=argCopy+i;
    argN[j][0]=0;
@@ -221,23 +233,40 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    j++;
   }
  }
+*/
  for(;j<10;j++) {
   argN[j]="(null)";//fill up the rest to prevent null deref.
  }
+
+ magic['r']=-1;//magic!
+ magic['n']=(user->nick?user->nick:"user->nick");
+ magic['u']=(user->user?user->user:"user->user");
+ magic['h']=(user->host?user->host:"user->host");
+ magic['m']=(myuser->nick?myuser->nick:"myuser->nick");
+ magic['~']=seghome;
+ magic['f']=(from?from:"from");
+ magic['p']=pid;
+ magic['s']=(arg?arg:"arg");
+ magic['0']=argN[0];
+ magic['1']=argN[1];
+ magic['2']=argN[2];
+ magic['3']=argN[3];
+ magic['4']=argN[4];
+ magic['5']=argN[5];
+ magic['6']=argN[6];
+ magic['7']=argN[7];
+ magic['8']=argN[8];
+ magic['9']=argN[9];
+ magic['q']=(arg?escahack(arg):"escarg");
+ magic['Q']=(arg?esca(arg,"\""):"escarg");
+ magic['%']="%";
+
  if(!orig_fmt) return 0;
  if(!(fmt=strdup(orig_fmt))) return 0;
  for(i=0;fmt[i];i++) {
   if(fmt[i] == '%') {
    i++;
-   switch(fmt[i]) {
-     case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
-     case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
-     case '5':case '6':case '7':case '8':case '9':case 'r':case 'q':
-     case 'Q':
-       c++;
-     default:
-       break;
-   }
+   if(magic[fmt[i]]) c++;
   }
  }
  args=malloc((sizeof(char *)) * (c + 1));
@@ -246,42 +275,22 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  for(j=0,i=0;fmt[i];i++) {
   if(fmt[i] == '%') {
    i++;
-   switch(fmt[i]) {
-     case '~':case 'p':case 'n':case 'h':case 'u':case 'f':case 's':
-     case 'm':case '%':case '0':case '1':case '2':case '3':case '4':
-     case '5':case '6':case '7':case '8':case '9':case 'r':case 'q':
-     case 'Q':
-      args[c]=((fmt[i]=='n')?(user->nick?user->nick:"user->nick"):
-               ((fmt[i]=='u')?(user->user?user->user:"user->user"):
-                ((fmt[i]=='~')?seghome:
-                 ((fmt[i]=='h')?(user->host?user->host:"user->host"):
-                  ((fmt[i]=='f')?(from?from:"from"):
-                   ((fmt[i]=='p')?pid:
-                    ((fmt[i]=='m')?(myuser->nick?myuser->nick:"myuser->nick")://and here.
-                     ((fmt[i]=='s')?(arg?arg:"arg"):
-                      ((fmt[i]=='0')?argN[0]:
-                       ((fmt[i]=='1')?argN[1]:
-                        ((fmt[i]=='2')?argN[2]:
-                         ((fmt[i]=='3')?argN[3]:
-             /* I bet  */ ((fmt[i]=='4')?argN[4]:
-             /* you     */ ((fmt[i]=='5')?argN[5]:
-             /* hate     */ ((fmt[i]=='6')?argN[6]:
-             /* this,     */ ((fmt[i]=='7')?argN[7]:
-             /* dontcha? :)*/ ((fmt[i]=='8')?argN[8]:
-                               ((fmt[i]=='9')?argN[9]:
-                                ((fmt[i]=='r')?randC[rand()%10]:
-                                 ((fmt[i]=='q')?(arg?escahack(arg):"escarg"):
-                                  ((fmt[i]=='Q')?(arg?esca(arg,"\""):"escarg"):"%"
-              )))))))))))))))))))));
-      fmt[i-1]=0;
-      if(!(fmt+j)) exit(68);
-      if(!(notargs[c]=strdup(fmt+j))) exit(66);
-      if(!args[c]) exit(200+c);
-      sz+=strlen(args[c]);
-      sz+=strlen(notargs[c]);
-      c++;
-      j=i+1;
+   if(magic[fmt[i]] == -1) {
+    args[c]=randC[rand()%10];
    }
+   if(magic[fmt[i]] > 0) {
+    args[c]=magic[fmt[i]];
+   } else {
+    args[c]="DERP";
+   }
+   fmt[i-1]=0;
+   if(!(fmt+j)) exit(68);
+   if(!(notargs[c]=strdup(fmt+j))) exit(66);
+   if(!args[c]) exit(200+c);
+   sz+=strlen(args[c]);
+   sz+=strlen(notargs[c]);
+   c++;
+   j=i+1;
   }
  }
  if(!(fmt+j)) exit(69);
@@ -911,7 +920,7 @@ char *recording,recording_raw;
 
 void c_record(int fd,char *from,char *line,...) {
  if(!line) {
-  privmsg(fd,from,"usage: !record 0|1");
+  privmsg(fd,from,"usage: !record format_string");
   return;
  }
  if(*line == '0' && *(line+1) == 0) {
@@ -1040,7 +1049,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  if(redirect_to_fd != -1) {
   fd=redirect_to_fd;
  }
- if(recording) {
+ if(recording && redones == 0) {
   debug_time(fd,from,"writing to log...");
   //snprintf(tmp,sizeof(tmp)-1,"<%s> %s",user->nick,msg);
   tmp2=format_magic(fd,from,user,recording,msg);
@@ -1055,7 +1064,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   if(msg[len] == '*') len++;
   if(msg[len] == ',' || msg[len] == ':') {
    if(msg[len+1] == ' ') {
-    msg+=len;
+    msg+=len+2;
    }
   }
  }
@@ -1067,6 +1076,9 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  if(*command == '\x01') {
   command[strlen(command)-1]=0;
   command++;
+ }
+ if(!strncmp(command,"s/",2)) {
+  command[1]=' ';
  }
  if((args=strchr(command,' '))) {
   *args=0;
