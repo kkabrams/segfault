@@ -247,6 +247,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  magic['f']=(from?from:"from");
  magic['p']=pid;
  magic['s']=(arg?arg:"arg");
+ magic['A']="\x01";
  magic['0']=argN[0];
  magic['1']=argN[1];
  magic['2']=argN[2];
@@ -277,8 +278,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    i++;
    if(magic[fmt[i]] == -1) {
     args[c]=randC[rand()%10];
-   }
-   if(magic[fmt[i]] > 0) {
+   } else if(magic[fmt[i]] > 0) {
     args[c]=magic[fmt[i]];
    } else {
     args[c]="DERP";
@@ -1146,6 +1146,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
 void line_handler(int fd,char *line) {//this should be built into the libary?
  char tmp[512];
  struct user *user;
+ int i;
  if(!(user=malloc(sizeof(struct user)))) exit(__LINE__);
  if(recording_raw) {
   append_file(fd,"epoch",RAWLOG,line,'\n');
@@ -1177,7 +1178,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  }
  free(line2);
  if(a[0] && a[1] && a[2]) {
-  if(!strcmp(a[0],"PRIVMSG") && strcmp(user->nick,myuser->nick)) {
+  if(!strcmp(a[0],"PRIVMSG") || !strcmp(a[0],"NOTICE")) {
    if(strcmp(user->nick,myuser->nick)) {
     message_handler(fd,*a[1]=='#'?a[1]:user->nick,user,a[2],0);
    }
@@ -1187,6 +1188,15 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
  }
  if(a[0] && user->nick && a[1]) {
+  if((ht_getnode(&alias,a[0])) != NULL) {
+   strcpy(tmp,a[0]);
+   for(i=0;a[i];i++) {
+    strcat(tmp," ");
+    strcat(tmp,a[i]);
+   }
+   message_handler(fd,"#cmd",user,tmp,1);   
+  }
+
   if(!strcmp(a[0],"JOIN")) {
    irc_mode(fd,a[1],"+o",user->nick);
   }
