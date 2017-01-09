@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#define __need_timer_t
 #include <time.h>
 #include <pwd.h>
 #include <sys/stat.h>
