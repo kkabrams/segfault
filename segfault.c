@@ -17,6 +17,8 @@
 #include <irc.h>
 #include <hashtable.h>
 
+#define RECURSE_LIMIT 10
+
 #define free(a) do{printf("freeing %p line:%d\n",(void *)a,__LINE__);if(a) free(a);}while(0);
 
 /*// just in case your system doesn't have strndup
@@ -57,6 +59,7 @@ char *strndup(char *s,int l) {
 struct user *myuser;
 char pid[6];
 char mode_magic;
+char snooty;
 int start_time;
 char *redo;
 int redirect_to_fd;
@@ -373,12 +376,12 @@ void extra_handler(int fd) {
      if(tailf[i].opt & TAILO_EVAL) {//eval
       if(tailf[i].opt & TAILO_FORMAT) {
        tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);
-       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,0);
+       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,1);
        free(tmp2);
       } else {
        //this will crash.
        tmp2=strdup(tmp);
-       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,0);
+       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,1);
        printf("tmp2 in crashing place: %p\n",tmp2);
       }
       printf("OHAI. WE SURVIVED!\n");
@@ -987,6 +990,11 @@ void c_linelimit(int fd,char *from,char *msg,...) {
    mode_magic^=1;
    privmsg(fd,from,"mode_magic flipped. happy easter!");
   }
+  if(msg[0] == 'b') {
+   snooty^=1;
+   if(snooty) privmsg(fd,from,"I will only listen to you if you address me directly.");
+   else privmsg(fd,from,"I will listen to any commands, no need to address me directly.");
+  }
   if(atoi(msg) > 0) {
    line_limit=atoi(msg);
    snprintf(tmp,255,"spam line limit set to: %d",line_limit);
@@ -1043,6 +1051,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  char *args;
  char tmp[512];
  char *tmp2;
+ char to_me;
  int len;
  int sz;
  printf("message_handler: entry: message: '%s' redones: %d\n",msg,redones);
@@ -1060,14 +1069,18 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
 
  len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(myuser->nick);
 
+ to_me=0;
  if(!strncasecmp(msg,myuser->nick,len)) {
   if(msg[len] == '*') len++;
   if(msg[len] == ',' || msg[len] == ':') {
    if(msg[len+1] == ' ') {
     msg+=len+2;
+    //privmsg(fd,from,"addressed directly!");
+    to_me=1;
    }
   }
  }
+ if(snooty && !to_me && !redones) return;
 
  if(!msg) exit(71);
  oldcommand=strdup(msg);
@@ -1136,7 +1149,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    privmsg(fd,from,tmp);
   }
  }
- if(redones >5) {
+ if(redones > RECURSE_LIMIT) {
   privmsg(fd,from,"I don't know if I'll ever get out of this alias hole you're telling me to dig. Fuck this.");
  }
  free(oldcommand);
@@ -1279,6 +1292,7 @@ int main(int argc,char *argv[]) {
  BUILDIN("!lobotomy",c_lobotomy);
  BUILDIN("!amnesia",c_amnesia);
  mode_magic=1;
+ snooty=0;
  redirect_to_fd=-1;
  debug=0;
  lines_sent=0;
