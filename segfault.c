@@ -1088,8 +1088,8 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  if(!oldcommand) exit(72);
  command=oldcommand;
  if(*command == '\x01') {
-  command[strlen(command)-1]=0;
-  command++;
+  command[strlen(command)-1]=0;//remove the end \x01
+  *command=';';
  }
  if(!strncmp(command,"s/",2)) {
   command[1]=' ';
@@ -1202,15 +1202,15 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
  }
  if(a[0] && user->nick && a[1]) {
+  strcpy(tmp,";");
+  strcat(tmp,a[0]);
   if((ht_getnode(&alias,a[0])) != NULL) {
-   strcpy(tmp,a[0]);
    for(i=0;a[i];i++) {
     strcat(tmp," ");
     strcat(tmp,a[i]);
    }
    message_handler(fd,"#cmd",user,tmp,1);   
   }
-
   if(!strcmp(a[0],"JOIN")) {
    irc_mode(fd,a[1],"+o",user->nick);
   }
