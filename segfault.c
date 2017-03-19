@@ -20,7 +20,7 @@
 
 #define RECURSE_LIMIT 10
 
-#define free(a) do{printf("freeing %p line:%d\n",(void *)a,__LINE__);if(a) free(a);}while(0);
+//#define free(a) do{printf("freeing %p line:%d\n",(void *)a,__LINE__);if(a) free(a);}while(0);
 
 /*// just in case your system doesn't have strndup
 char *strndup(char *s,int l) {
@@ -1094,18 +1094,14 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  if(!strncmp(command,"s/",2)) {
   command[1]=' ';
  }
+ while(!strncmp(command,"lambda ",7)) {
+  command+=7;
+  command=format_magic(fd,from,user,command,command);
+  lambdad=1;
+ }
  if((args=strchr(command,' '))) {
   *args=0;
   args++;
- }
- while(!strncmp(command,"lambda",6)) {
-  command+=7;
-  if((args=strchr(command,' '))) {
-   *args=0;
-   args++;
-  }
-  args=format_magic(fd,from,user,args,args);
-  lambdad=1;
  }
  if((lol.data=ht_getvalue(&builtin,command))) {
   func=lol.func;
