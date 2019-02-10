@@ -1,5 +1,5 @@
-LDFLAGS=-lirc -lhashtable
-CFLAGS=-std=c99 -pedantic -Wall
+LDFLAGS=-lirc -lhashtable -L/usr/local/lib
+CFLAGS=-std=c99 -pedantic -Wall -ggdb -I/usr/local/include
 
 all: segfault
 
@@ -11,4 +11,4 @@ clean:
 	rm -f segfault
 
 install: all
-	cp -f segfault /usr/local/bin/segfault
+	install segfault /usr/local/bin/
