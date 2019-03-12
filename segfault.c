@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <signal.h>
+#include <syslog.h>
 
 //epoch's libraries.
 #include <irc.h>
@@ -39,8 +40,8 @@ char *strndup(char *s,int l) {
 #define LINES_SENT_LIMIT	1
 #define LINELEN			400
 #define SEGHOMELEN		1024
-#define RAWLOG			"./files/rawlog"
-#define LOG			"./files/log"
+#define RAWLOG			"/home/segfault/files/rawlog"
+#define LOG			"/home/segfault/files/log"
 #define BS 4096
 // !c uses 56 for its tail.
 // 56 == 32 + 16 + 8 == 0x38 == 0x20+0x10+0x8 == SPAM | BEGIN | MSG
@@ -59,8 +60,10 @@ char *strndup(char *s,int l) {
 
 struct user *myuser;
 char pid[6];
+char time_str[16];
 char mode_magic;
 char snooty;
+char message_handler_trace;
 int start_time;
 char *redo;
 int redirect_to_fd;
@@ -217,10 +220,11 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  char *output,*fmt,*argCopy;
  char **args,**notargs;
  char *argN[10],randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
+ snprintf(time_str,sizeof(time_str)-1,"%d",time(0));
  for(i=0;i<256;i++) {
   magic[i]=0;
  }
- if(!arg) arg="%s";
+ if(!arg) arg="";//does anything depend on this weird thing?
  if(!(argCopy=strdup(arg))) return 0;
  argN[0]=argCopy;
  for(j=1;(argCopy=strchr(argCopy,' ')) && j < 10;j++) {
@@ -250,8 +254,10 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  magic['~']=seghome;
  magic['f']=(from?from:"from");
  magic['p']=pid;
+ magic['t']=time_str;
  magic['s']=(arg?arg:"arg");
- magic['A']="\x01";
+ magic['A']="\x01";//for ctcp and action
+ magic['C']="\x03";//for colors
  magic['0']=argN[0];
  magic['1']=argN[1];
  magic['2']=argN[2];
@@ -285,7 +291,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    } else if(magic[fmt[i]] > 0) {
     args[c]=magic[fmt[i]];
    } else {
-    args[c]="DERP";
+    args[c]="INVALID MAGIC";
    }
    fmt[i-1]=0;
    if(!(fmt+j)) exit(68);
@@ -309,7 +315,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  strcat(output,notargs[i]);
  output[sz]=0;
  free(fmt);
- free(argCopy);
+ free(argN[0]);
  return output;
 }
 
@@ -376,16 +382,16 @@ void extra_handler(int fd) {
      if(strchr(tmp,'\n')) *strchr(tmp,'\n')=0;
      if(tailf[i].opt & TAILO_EVAL) {//eval
       if(tailf[i].opt & TAILO_FORMAT) {
-       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);
+       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);//the line read is the format string.
        message_handler(fd,tailf[i].to,tailf[i].user,tmp2,1);
        free(tmp2);
       } else {
        //this will crash.
        tmp2=strdup(tmp);
        message_handler(fd,tailf[i].to,tailf[i].user,tmp2,1);
-       printf("tmp2 in crashing place: %p\n",tmp2);
+       //printf("tmp2 in crashing place: %p\n",tmp2);
       }
-      printf("OHAI. WE SURVIVED!\n");
+      //printf("OHAI. WE SURVIVED!\n");
      }
      if(tailf[i].opt & TAILO_RAW) {//raw
       tmp2=malloc(strlen(tmp)+4);
@@ -394,7 +400,12 @@ void extra_handler(int fd) {
       free(tmp2);
      }
      if(tailf[i].opt & TAILO_MSG) {//just msg the lines.
-      privmsg(fd,tailf[i].to,tmp);
+      if(tailf[i].opt & TAILO_FORMAT && tailf[i].args) {
+       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tailf[i].args,tmp);//the args is the format string.
+       privmsg(fd,tailf[i].to,tmp2);
+      } else {
+       privmsg(fd,tailf[i].to,tmp);
+      }
      }
      if(tailf[i].lines >= line_limit && (tailf[i].opt & TAILO_SPAM)) {
       tailf[i].lines=-1; //lock it.
@@ -502,10 +513,10 @@ void c_leettail(int fd,char *from,char *file,struct user *user,...) {
  int d;
  int n;
  if(!file) {
-  privmsg(fd,from,"!leettail NNfilename");
-  privmsg(fd,from,"!leettail NNNfilename");
-  privmsg(fd,from,"!leettail NN#channel:filename");
-  privmsg(fd,from,"!leettail NNN#channel:filename");
+  privmsg(fd,from,"!leettail NNfilename [format]");
+  privmsg(fd,from,"!leettail NNNfilename [format]");
+  privmsg(fd,from,"!leettail NN#channel:filename [format]");
+  privmsg(fd,from,"!leettail NNN#channel:filename [format]");
   return;
  }
  if(file[0]) {
@@ -572,6 +583,7 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
    if(!strcmp(tailf[i].file,line) || tailf[i].inode == st.st_ino) {
     free(tailf[i].to);
     tailf[i].to=0;
+    tailf[i].user=user;//memory leak?
     if(!merp) exit(76);
     tailf[i].to=strdup(merp);
     if(mode) {
@@ -923,8 +935,14 @@ void c_tails(int fd,char *from,...) {
 char *recording,recording_raw;
 
 void c_record(int fd,char *from,char *line,...) {
+ char tmp[512];
  if(!line) {
   privmsg(fd,from,"usage: !record format_string");
+  if(recording) {
+    snprintf(tmp,sizeof(tmp)-1,"currently recording to: %s with format string: %s",LOG,recording);
+    privmsg(fd,from,tmp);
+  }
+  else privmsg(fd,from,"not recording.");
   return;
  }
  if(*line == '0' && *(line+1) == 0) {
@@ -935,15 +953,24 @@ void c_record(int fd,char *from,char *line,...) {
  }
  else {
   recording=strdup(line);
-  unlink(LOG);
+  if(unlink(LOG) == -1) {
+   privmsg(fd,from,"failed to unlink log file!");
+   privmsg(fd,from,strerror(errno));
+  }
   privmsg(fd,from,"recording IRC.");
  }
  privmsg(fd,from,recording?"1":"0");
 }
 
 void c_rawrecord(int fd,char *from,char *line,...) {
+ char tmp[512];
  if(!line) {
   privmsg(fd,from,"usage: !rawrecord 0|1");
+  if(recording_raw) {
+    snprintf(tmp,sizeof(tmp)-1,"currently recording to: %s",RAWLOG);
+    privmsg(fd,from,tmp);
+  }
+  else privmsg(fd,from,"not recording.");
   return;
  }
  if(*line == '0') { 
@@ -996,6 +1023,9 @@ void c_linelimit(int fd,char *from,char *msg,...) {
    if(snooty) privmsg(fd,from,"I will only listen to you if you address me directly.");
    else privmsg(fd,from,"I will listen to any commands, no need to address me directly.");
   }
+  if(msg[0] == 'c') {
+   message_handler_trace^=1;
+  }
   if(atoi(msg) > 0) {
    line_limit=atoi(msg);
    snprintf(tmp,255,"spam line limit set to: %d",line_limit);
@@ -1005,7 +1035,7 @@ void c_linelimit(int fd,char *from,char *msg,...) {
    privmsg(fd,from,"hidden feature! negative line limit flips debug bit.");
    debug^=1;
   } else {
-   privmsg(fd,from,"something else!");
+   //privmsg(fd,from,"something else!");
   }
  }
 }
@@ -1055,7 +1085,11 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  char to_me;
  int len;
  int sz;
- printf("message_handler: entry: message: '%s' redones: %d\n",msg,redones);
+// printf("message_handler: entry: message: '%s' redones: %d\n",msg,redones);
+ if(redones && message_handler_trace) {
+  snprintf(tmp,sizeof(tmp)-1,"trace: n: %s u: %s h: %s message '%s' redones: '%d'",user->nick,user->user,user->host,msg,redones);
+  privmsg(fd,from,tmp);
+ }
  if(redirect_to_fd != -1) {
   fd=redirect_to_fd;
  }
@@ -1068,6 +1102,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   debug_time(fd,from,"finished writing to log.");
  }
 
+ //there's a bug here when directing a string to a nick but the * isn't part of the nick.
  len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(myuser->nick);
 
  to_me=0;
@@ -1091,9 +1126,9 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   command[strlen(command)-1]=0;//remove the end \x01
   *command=';';
  }
- if(!strncmp(command,"s/",2)) {
-  command[1]=' ';
- }
+// if(!strncmp(command,"s/",2)) {
+//  command[1]=' ';
+// }
  while(!strncmp(command,"lambda ",7)) {
   command+=7;
   command=format_magic(fd,from,user,command,command);
@@ -1110,10 +1145,15 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
 //   free(args);
 //  }
  }
- else if(redones < 5) {
+ else if(redones < RECURSE_LIMIT) {
   debug_time(fd,from,"checking aliases...");
   //command--;// :>
   if((m=ht_getnode(&alias,command))) {
+   if(rand()%1000 == 0 && redones == 0) {
+     privmsg(fd,from,"I don't want to run that command right now.");
+     free(oldcommand);
+     return;
+   }
    //sz=(strlen(command)-strlen(m->original)+strlen(m->target)+1);// what is this used for?
 //??? why not use args?
    redo=format_magic(fd,from,user,m->target,(command+strlen(m->original)+1));
@@ -1122,11 +1162,11 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    free(redo);
    redo=0;
    free(oldcommand);
-   printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
+   //printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
    return;
   }
   debug_time(fd,from,"finished checking aliases. not found.");
-  if((m=ht_getnode(&alias,"!chat"))) {
+  if((m=ht_getnode(&alias,"!chat"))) {//wtf is this for?
    if(args) command[strlen(command)]=' ';//turn that null into a space!
    command++;// :>
    if(debug) {
@@ -1146,11 +1186,11 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    privmsg(fd,from,tmp);
   }
  }
- if(redones > RECURSE_LIMIT) {
+ if(redones >= RECURSE_LIMIT) {
   privmsg(fd,from,"I don't know if I'll ever get out of this alias hole you're telling me to dig. Fuck this.");
  }
  free(oldcommand);
- printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
+ //printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
 }
 
 void line_handler(int fd,char *line) {//this should be built into the libary?
@@ -1158,6 +1198,8 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  struct user *user;
  int i;
  if(!(user=malloc(sizeof(struct user)))) exit(__LINE__);
+ memset(user,0,sizeof(struct user));
+ printf("line: %s\n",line);
  if(recording_raw) {
   append_file(fd,"epoch",RAWLOG,line,'\n');
  }
@@ -1166,7 +1208,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  struct entry *tmp2;
  //line will be mangled by the cutter.
  char **a=line_cutter(fd,line,user);
- if(!user->user && a[0]) { //server message
+ if(!user->user && a[0]) { //server message.
 //:armitage.hacking.allowed.org 353 asdf = #default :@SegFault @FreeArtMan @foobaz @wall @Lamb3_13 @gizmore @blackh0le
   strcpy(tmp,"!");
   strcat(tmp,a[0]);
@@ -1176,14 +1218,15 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
   if((tmp2=ht_getnode(&alias,tmp)) != NULL) {
    strcat(tmp," ");
-   if(!(user->nick=strdup("epoch"))) exit(__LINE__);
-   if(!(user->user=strdup("epoch"))) exit(__LINE__);
-   if(!(user->host=strdup("localhost"))) exit(__LINE__);
+   int freenick=0,freeuser=0,freehost=0;
+   if(!user->nick) { if(!(user->nick=strdup("$UNDEF_NICK"))) exit(__LINE__); freenick=1;}
+   if(!user->user) { if(!(user->user=strdup("$UNDEF_USER"))) exit(__LINE__); freeuser=1;}
+   if(!user->host) { if(!(user->host=strdup("$UNDEF_HOST"))) exit(__LINE__); freehost=1;}
    strcat(tmp,line2);
    message_handler(fd,"#cmd",user,tmp,1);
-   free(user->nick);
-   free(user->user);
-   free(user->host);
+   if(freenick) free(user->nick);
+   if(freeuser) free(user->user);
+   if(freehost) free(user->host);
   }
  }
  free(line2);
@@ -1200,13 +1243,16 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  if(a[0] && user->nick && a[1]) {
   strcpy(tmp,";");
   strcat(tmp,a[0]);
-  if((ht_getnode(&alias,a[0])) != NULL) {
+  if((ht_getnode(&alias,tmp)) != NULL) {
    for(i=0;a[i];i++) {
     strcat(tmp," ");
     strcat(tmp,a[i]);
    }
    message_handler(fd,"#cmd",user,tmp,1);   
-  }
+  }// else {
+   //privmsg(fd,"#cmd","couldn't find alias for:");
+   //privmsg(fd,"#cmd",a[0]);
+  //}
   if(!strcmp(a[0],"JOIN")) {
    irc_mode(fd,a[1],"+o",user->nick);
   }
@@ -1219,6 +1265,10 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    mywrite(fd,tmp);
 //   snprintf(tmp,sizeof(tmp)-1,"KILL %s :don't fuck with me.\r\n",user->nick);
 //   mywrite(fd,tmp);
+  }
+  if(!strcmp(user->nick,myuser->nick) && !strcmp(a[0],"PART") ) {
+   snprintf(tmp,sizeof(tmp)-1,"JOIN %s\r\n",a[1]);
+   mywrite(fd,tmp);
   }
   if(!strcmp(a[0],"MODE") && mode_magic) {
    if(strcmp(user->nick,myuser->nick)) {
@@ -1254,8 +1304,13 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  free(a);
 }
 
+void sigpipe_handler(int sig) {
+ syslog(LOG_WARNING,"SegFault received a sigpipe! (ignoring it)");
+}
+
 int main(int argc,char *argv[]) {
- signal(SIGSTOP,exit);
+ signal(SIGSTOP,exit);//prevent pausing
+ signal(SIGPIPE,sigpipe_handler);
  int fd;
  srand(time(0) + getpid());
  struct passwd *pwd;
@@ -1263,33 +1318,35 @@ int main(int argc,char *argv[]) {
  char *s,*p;
  int c;
  inittable(&builtin,TSIZE);
-#define BUILDIN(a,b) ht_setkey(&builtin,a,(void *)((union hack){(void (*)(int,...))b}.data))
- BUILDIN("!builtin",c_builtin);
- BUILDIN("!builtins",c_builtins);
- BUILDIN("!raw",c_raw);
- BUILDIN("!leetsetout",c_leetsetout);
- BUILDIN("!resetout",c_resetout);
- BUILDIN("!botup",c_botup);
- BUILDIN("!linelimit",c_linelimit);
- BUILDIN("!nick",c_nick);
- BUILDIN("!tailunlock",c_tailunlock);
- BUILDIN("!istaillocked",c_istaillocked);
- BUILDIN("!changetail",c_changetail);
- BUILDIN("!tails",c_tails);
- BUILDIN("!record",c_record);
- BUILDIN("!rawrecord",c_rawrecord);
- BUILDIN("!leettail",c_leettail);
- BUILDIN("!leetuntail",c_leetuntail);
- BUILDIN("!leetappend",c_leetappend);
- BUILDIN("!say",c_say);
- BUILDIN("!id",c_id);
- BUILDIN("!kill",c_kill);
- BUILDIN("!alias",c_alias_h);
- BUILDIN("!aliases",c_aliases_h);
- BUILDIN("!lobotomy",c_lobotomy);
- BUILDIN("!amnesia",c_amnesia);
+#define CMDCHR "!"
+#define BUILDIN(a,b) ht_setkey(&builtin,CMDCHR a,(void *)((union hack){(void (*)(int,...))b}.data))
+ BUILDIN("builtin",c_builtin);
+ BUILDIN("builtins",c_builtins);
+ BUILDIN("raw",c_raw);
+ BUILDIN("leetsetout",c_leetsetout);
+ BUILDIN("resetout",c_resetout);
+ BUILDIN("botup",c_botup);
+ BUILDIN("linelimit",c_linelimit);
+ BUILDIN("nick",c_nick);
+ BUILDIN("tailunlock",c_tailunlock);
+ BUILDIN("istaillocked",c_istaillocked);
+ BUILDIN("changetail",c_changetail);
+ BUILDIN("tails",c_tails);
+ BUILDIN("record",c_record);
+ BUILDIN("rawrecord",c_rawrecord);
+ BUILDIN("leettail",c_leettail);
+ BUILDIN("leetuntail",c_leetuntail);
+ BUILDIN("leetappend",c_leetappend);
+ BUILDIN("say",c_say);
+ BUILDIN("id",c_id);
+ BUILDIN("kill",c_kill);
+ BUILDIN("alias",c_alias_h);
+ BUILDIN("aliases",c_aliases_h);
+ BUILDIN("lobotomy",c_lobotomy);
+ BUILDIN("amnesia",c_amnesia);
  mode_magic=1;
  snooty=0;
+ message_handler_trace=0;
  redirect_to_fd=-1;
  debug=0;
  lines_sent=0;
@@ -1338,5 +1395,6 @@ int main(int argc,char *argv[]) {
  getcwd(seghome,SEGHOMELEN);
  prestartup_stuff(fd);
  if(fd == -1) return 0;
+ printf("server fd: %d\n",fd);
  return runit(fd,line_handler,extra_handler);
 }
