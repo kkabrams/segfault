@@ -481,7 +481,6 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   tailf[i].opt=opt;
   tailf[i].inode=st.st_ino;
   if(!(tailf[i].user=malloc(sizeof(struct user)))) exit(__LINE__);
-  
   if(!(tailf[i].user->nick=strdup(user->nick))) exit(__LINE__);
   if(!(tailf[i].user->user=strdup(user->user))) exit(__LINE__);
   if(!(tailf[i].user->host=strdup(user->host))) exit(__LINE__);
@@ -568,7 +567,7 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
  }
  if((fdd=open(line,O_RDONLY|O_NONBLOCK,0)) == -1) {
   snprintf(tmp,sizeof(tmp)-1,"changetail: %s: (%s) fd:%d",strerror(errno),line,fdd);
-  privmsg(fd,"#cmd",tmp); 
+  privmsg(fd,"#cmd",tmp);
   return;
  }
  if(debug) {
@@ -697,7 +696,6 @@ void c_aliases_h(int fd,char *from,char *line,...) {
   privmsg(fd,from,"usage: !aliases [search-term]");
   return;
  }
- 
  for(i=0;i<alias.kl;i++) {
   hi=alias.bucket[alias.keys[i]];
   if(hi) {
@@ -973,7 +971,7 @@ void c_rawrecord(int fd,char *from,char *line,...) {
   else privmsg(fd,from,"not recording.");
   return;
  }
- if(*line == '0') { 
+ if(*line == '0') {
   privmsg(fd,from,"no longer recording raw IRC.");
   recording_raw=0;
   return;
@@ -1248,7 +1246,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
     strcat(tmp," ");
     strcat(tmp,a[i]);
    }
-   message_handler(fd,"#cmd",user,tmp,1);   
+   message_handler(fd,"#cmd",user,tmp,1);
   }// else {
    //privmsg(fd,"#cmd","couldn't find alias for:");
    //privmsg(fd,"#cmd",a[0]);
