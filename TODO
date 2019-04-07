@@ -4,14 +4,15 @@
  o make segfault use a hashtable for builtins too
  o delete compile.sh and stick to using Makefiles.
  o document the env vars that segfault uses
-
---- ^^^ done ^^^ ---
-
- o update seghome repo more often and reference it in segfault's repo
+ o update seghome repo more often and reference it in segfault's repo <-- this is the reference.
  o make a way to reference env vars from aliases %${seghome}?
    OR make new %stuff to reference specific values in segfault
    since env vars aren't always set but defaults might be used.
    otherwise I'll have to set those env vars.
+   //this is done using %$NAME= in a usual magic area, like aliases or lambda !say %$DERP=
+
+--- ^^^ done ^^^ ---
+
  o add stuff to libirc to buffer stuff being written to the socket so that
    it can put a speed limit on that kind of stuff. (but why would the bot
    get an fd from the runit function?)

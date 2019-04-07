@@ -99,7 +99,7 @@ struct tail {
 
 char *shitlist[] = { 0 };
 
-void message_handler(int fd,char *from,struct user *user,char *msg,int redones);
+int message_handler(int fd,char *from,struct user *user,char *msg,int redones);
 void c_leetuntail(int fd,char *from,char *line,...);
 
 //this function isn't with the rest of them because... meh.
@@ -132,7 +132,7 @@ void irc_mode(int fd,char *channel,char *mode,char *nick) {
  }
  snprintf(hrm,sz,"MODE %s %s %s\r\n",channel,mode,nick);
  write(fd,hrm,strlen(hrm));
- free(hrm); 
+ free(hrm);
 }
 
 void irc_nick(int fd,char *nick) {
@@ -144,7 +144,7 @@ void irc_nick(int fd,char *nick) {
  }
  snprintf(hrm,sz,"NICK %s\r\n",nick);
  write(fd,hrm,strlen(hrm));
- free(hrm); 
+ free(hrm);
 }
 
 void privmsg(int fd,char *who,char *msg) {
@@ -216,8 +216,9 @@ char *escahack(char *s) {//for single quotes
 //try to shorten this up sometime...
 char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg) {
  char *magic[256];
- int i=0,j=1,sz=0,c=1;
+ int i=0,j=1,sz=0,c=1,d=0;
  char *output,*fmt,*argCopy;
+ char *plzhold;
  char **args,**notargs;
  char *argN[10],randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
  snprintf(time_str,sizeof(time_str)-1,"%d",time(0));
@@ -247,6 +248,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  }
 
  magic['r']=-1;//magic!
+ magic['$']=-2;//more magic!
  magic['n']=(user->nick?user->nick:"user->nick");
  magic['u']=(user->user?user->user:"user->user");
  magic['h']=(user->host?user->host:"user->host");
@@ -286,8 +288,19 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  for(j=0,i=0;fmt[i];i++) {
   if(fmt[i] == '%') {
    i++;
+   d=1;
    if(magic[fmt[i]] == -1) {
     args[c]=randC[rand()%10];
+   } else if(magic[fmt[i]] == -2) {
+    if((plzhold=strchr(fmt+i+1,'='))) {
+     *plzhold=0;
+     args[c]=getenv(fmt+i+1);
+     if(!args[c]) { args[c]="ENV VAR NOT FOUND"; }
+     *plzhold='=';
+     d=(plzhold - (fmt + i - 1));
+    } else {
+     args[c]="BROKEN ENV VAR REFERENCE";
+    }
    } else if(magic[fmt[i]] > 0) {
     args[c]=magic[fmt[i]];
    } else {
@@ -300,7 +313,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
    sz+=strlen(args[c]);
    sz+=strlen(notargs[c]);
    c++;
-   j=i+1;
+   j=i+d;
   }
  }
  if(!(fmt+j)) exit(69);
@@ -498,6 +511,7 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   tailf[i].lines=0;
  }
 }
+
 
 void c_botup(int fd,char *from,...) {
  char tmp[256];
@@ -1071,7 +1085,7 @@ void c_nick(int fd,char *from,char *msg,...) {
  irc_nick(fd,myuser->nick);
 }
 
-void message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
+int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  struct entry *m;
  union hack lol;
  char lambdad;
@@ -1114,7 +1128,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    }
   }
  }
- if(snooty && !to_me && !redones) return;
+ if(snooty && !to_me && !redones) return 1;//eated
 
  if(!msg) exit(71);
  oldcommand=strdup(msg);
@@ -1123,6 +1137,12 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
  if(*command == '\x01') {
   command[strlen(command)-1]=0;//remove the end \x01
   *command=';';
+ }
+ //access control goes here
+ if(strcmp(user->host,"127.0.0.1") && //me
+    strcmp(myuser->nick,user->nick)
+    ) {
+    return 1;//I want this to claim eatedness.
  }
 // if(!strncmp(command,"s/",2)) {
 //  command[1]=' ';
@@ -1150,7 +1170,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    if(rand()%1000 == 0 && redones == 0) {
      privmsg(fd,from,"I don't want to run that command right now.");
      free(oldcommand);
-     return;
+     return 1;//count this as being handled.
    }
    //sz=(strlen(command)-strlen(m->original)+strlen(m->target)+1);// what is this used for?
 //??? why not use args?
@@ -1161,23 +1181,9 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
    redo=0;
    free(oldcommand);
    //printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
-   return;
+   return 1;
   }
   debug_time(fd,from,"finished checking aliases. not found.");
-  if((m=ht_getnode(&alias,"!chat"))) {//wtf is this for?
-   if(args) command[strlen(command)]=' ';//turn that null into a space!
-   command++;// :>
-   if(debug) {
-    snprintf(tmp,sizeof(tmp)-1,"using defualt command! '%s' with args '%s'","!chat",command);
-    privmsg(fd,from,tmp);
-   }
-   //redo=format_magic(fd,from,user,"!chat",command);
-   sz=(strlen("!chat")+strlen(command)+1);
-   redo=malloc(sz+1);
-   snprintf(redo,sz,"%s %s","!chat",command);
-   message_handler(fd,from,user,redo,redones+1);
-   free(redo);
-  }
   redo=0;
   if(debug) {
    snprintf(tmp,sizeof(tmp)-1,"command not found: '%s' with args '%s'",command,args);
@@ -1188,6 +1194,7 @@ void message_handler(int fd,char *from,struct user *user,char *msg,int redones) 
   privmsg(fd,from,"I don't know if I'll ever get out of this alias hole you're telling me to dig. Fuck this.");
  }
  free(oldcommand);
+ return 0;//I guess we didn't find anyway. let it fall back to generic handlers.
  //printf("message_handler: leaving: msg: %s redones: %d\n",msg,redones);
 }
 
@@ -1216,22 +1223,26 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
   }
   if((tmp2=ht_getnode(&alias,tmp)) != NULL) {
    strcat(tmp," ");
-   int freenick=0,freeuser=0,freehost=0;
-   if(!user->nick) { if(!(user->nick=strdup("$UNDEF_NICK"))) exit(__LINE__); freenick=1;}
-   if(!user->user) { if(!(user->user=strdup("$UNDEF_USER"))) exit(__LINE__); freeuser=1;}
-   if(!user->host) { if(!(user->host=strdup("$UNDEF_HOST"))) exit(__LINE__); freehost=1;}
+   //int freenick=0,freeuser=0,freehost=0;
+   //if(!user->nick) { if(!(user->nick=strdup("$UNDEF_NICK"))) exit(__LINE__); freenick=1;}
+   //if(!user->user) { if(!(user->user=strdup("$UNDEF_USER"))) exit(__LINE__); freeuser=1;}
+   //if(!user->host) { if(!(user->host=strdup("$UNDEF_HOST"))) exit(__LINE__); freehost=1;}
    strcat(tmp,line2);
-   message_handler(fd,"#cmd",user,tmp,1);
-   if(freenick) free(user->nick);
-   if(freeuser) free(user->user);
-   if(freehost) free(user->host);
+   message_handler(fd,"epoch",myuser,tmp,1);
+   //if(freenick) free(user->nick);
+   //if(freeuser) free(user->user);
+   //if(freehost) free(user->host);
   }
  }
  free(line2);
  if(a[0] && a[1] && a[2]) {
   if(!strcmp(a[0],"PRIVMSG") || !strcmp(a[0],"NOTICE")) {
    if(strcmp(user->nick,myuser->nick)) {
-    message_handler(fd,*a[1]=='#'?a[1]:user->nick,user,a[2],0);
+    if(message_handler(fd,*a[1]=='#'?a[1]:user->nick,user,a[2],0)) {
+     free(user);//we handled this message. don't let it fall into more generic handlers.
+     free(a);
+     return;
+    }
    }
    else {
     if(debug) privmsg(fd,*a[1]=='#'?a[1]:user->nick,"This server has an echo");
