@@ -1,5 +1,6 @@
-#include <stdio.h>
+#define _GNU_SOURCE //to get string.h to have strcasestr
 #include <string.h>
+#include <stdio.h>
 #include <stdarg.h>
 #include <signal.h>
 #include <errno.h>
@@ -14,6 +15,7 @@
 #include <sys/resource.h>
 #include <signal.h>
 #include <syslog.h>
+#include <grp.h> //setgroups
 
 //epoch's libraries.
 #include <irc.h>
@@ -223,7 +225,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  char *plzhold;
  char **args,**notargs;
  char *argN[10],randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
- snprintf(time_str,sizeof(time_str)-1,"%d",time(0));
+ snprintf(time_str,sizeof(time_str)-1,"%ld",time(0));//time_t on Linux is long int?
  for(i=0;i<256;i++) {
   magic[i]=0;
  }
@@ -249,8 +251,8 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   argN[j]="(null)";//fill up the rest to prevent null deref.
  }
 
- magic['r']=-1;//magic!
- magic['$']=-2;//more magic!
+ magic['r']=(char *)-1;//magic!
+ magic['$']=(char *)-2;//more magic!
  magic['n']=(user->nick?user->nick:"user->nick");
  magic['u']=(user->user?user->user:"user->user");
  magic['h']=(user->host?user->host:"user->host");
@@ -281,7 +283,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  for(i=0;fmt[i];i++) {
   if(fmt[i] == '%') {
    i++;
-   if(magic[fmt[i]]) c++;
+   if(magic[(unsigned char)fmt[i]]) c++;
   }
  }
  args=malloc((sizeof(char *)) * (c + 1));
@@ -291,9 +293,9 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   if(fmt[i] == '%') {
    i++;
    d=1;
-   if(magic[fmt[i]] == -1) {
+   if((int)magic[(unsigned char)fmt[i]] == -1) {
     args[c]=randC[rand()%10];
-   } else if(magic[fmt[i]] == -2) {
+   } else if((int)magic[(unsigned char)fmt[i]] == -2) {
     if((plzhold=strchr(fmt+i+1,'='))) {
      *plzhold=0;
      args[c]=getenv(fmt+i+1);
@@ -303,8 +305,8 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
     } else {
      args[c]="BROKEN ENV VAR REFERENCE";
     }
-   } else if(magic[fmt[i]] > 0) {
-    args[c]=magic[fmt[i]];
+   } else if((int)magic[(unsigned char)fmt[i]] > 0) {
+    args[c]=magic[(unsigned char)fmt[i]];
    } else {
     args[c]="INVALID MAGIC";
    }
@@ -517,7 +519,8 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
 
 void c_botup(int fd,char *from,...) {
  char tmp[256];
- snprintf(tmp,sizeof(tmp)-1,"botup: %llu",time(0)-start_time);
+ //snprintf(tmp,sizeof(tmp)-1,"botup: %llu",time(0)-start_time);//NetBSD I guess
+ snprintf(tmp,sizeof(tmp)-1,"botup: %lu",time(0)-start_time);//Raspi
  privmsg(fd,from,tmp);
 }
 
@@ -531,9 +534,9 @@ void c_putenv(int fd,char *from,char *line,...) {
 
 void c_mem(int fd,char *from,char *line,...) {
  char tmp[512];
- char *function=line;
+// char *function=line;
  unsigned char value;
- unsigned char *v;
+ char *v;
  unsigned int address; // lol. will fail on x64
  if(!line) {
   privmsg(fd,from,"usage: !mem address [value]");
@@ -546,7 +549,7 @@ void c_mem(int fd,char *from,char *line,...) {
  if((v=strchr(line,' '))) {
   *v=0;
   v++;
-  sscanf(v,"%02x",&value);
+  sscanf(v,"%02hhx",&value);
   *((unsigned char *)address)=value;
   snprintf(tmp,sizeof(tmp)-1,"address %08x now containes the value %02x",address,value);
   privmsg(fd,from,tmp);
@@ -903,10 +906,10 @@ void c_tailunlock(int fd,char *from,char *file,...) {
 char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
  int fdd;
  char tmp[512];
- char derp[2];
+// char derp[2];
  FILE *fp;
- derp[0]=(char)nl;
- derp[1]=0;
+// derp[0]=(char)nl;
+// derp[1]=0;
  if(line == 0) return mywrite(fd,"QUIT :line == 0 in append_file\r\n"),-1;
  if((fdd=open(file,O_WRONLY|O_NONBLOCK|O_APPEND|O_CREAT,0640)) == -1) {
   snprintf(tmp,sizeof(tmp)-1,"append_file: %s: (%s) fd:%d",strerror(errno),file,fdd);
@@ -1127,7 +1130,7 @@ void c_nick(int fd,char *from,char *msg,...) {
 int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  struct entry *m;
  union hack lol;
- char lambdad;
+// char lambdad;
  char *command;
  char *oldcommand;
  char *args;
@@ -1135,7 +1138,7 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  char *tmp2;
  char to_me;
  int len;
- int sz;
+// int sz;
 // printf("message_handler: entry: message: '%s' redones: %d\n",msg,redones);
  if(redones && message_handler_trace) {
   snprintf(tmp,sizeof(tmp)-1,"trace: n: %s u: %s h: %s message '%s' redones: '%d'",user->nick,user->user,user->host,msg,redones);
@@ -1186,7 +1189,7 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  while(!strncmp(command,"lambda ",7)) {
   command+=7;
   command=format_magic(fd,from,user,command,command);
-  lambdad=1;
+  //lambdad=1;
  }
  if((args=strchr(command,' '))) {
   *args=0;
