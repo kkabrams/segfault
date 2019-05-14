@@ -19,6 +19,8 @@
 #include <irc.h>
 #include <hashtable.h>
 
+#include "access.h"
+
 #define RECURSE_LIMIT 10
 
 //#define free(a) do{printf("freeing %p line:%d\n",(void *)a,__LINE__);if(a) free(a);}while(0);
@@ -270,8 +272,8 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  magic['7']=argN[7];
  magic['8']=argN[8];
  magic['9']=argN[9];
- magic['q']=(arg?escahack(arg):"escarg");
- magic['Q']=(arg?esca(arg,"\""):"escarg");
+ magic['q']=(arg && strlen(arg)?escahack(arg):"");
+ magic['Q']=(arg && strlen(arg)?esca(arg,"\""):"");
  magic['%']="%";
 
  if(!orig_fmt) return 0;
@@ -519,6 +521,42 @@ void c_botup(int fd,char *from,...) {
  privmsg(fd,from,tmp);
 }
 
+void c_putenv(int fd,char *from,char *line,...) {
+ if(!line) {
+  privmsg(fd,from,"usage: !putenv VARIABLE=VALUE");
+  return;
+ }
+ putenv(strdup(line));//OH MY GOD. WHAT THE FUCK? MEMORY LEAK AND NO CHECKS AT ALL!?!?
+}
+
+void c_mem(int fd,char *from,char *line,...) {
+ char tmp[512];
+ char *function=line;
+ unsigned char value;
+ unsigned char *v;
+ unsigned int address; // lol. will fail on x64
+ if(!line) {
+  privmsg(fd,from,"usage: !mem address [value]");
+  return;
+ }
+ if(!sscanf(line,"%08x",&address)) {
+  privmsg(fd,from,"sscanf didn't get an address.");
+  return;
+ }
+ if((v=strchr(line,' '))) {
+  *v=0;
+  v++;
+  sscanf(v,"%02x",&value);
+  *((unsigned char *)address)=value;
+  snprintf(tmp,sizeof(tmp)-1,"address %08x now containes the value %02x",address,value);
+  privmsg(fd,from,tmp);
+ } else {
+  snprintf(tmp,sizeof(tmp)-1,"address %08x contains %02x",address,*((unsigned char *)address));
+  privmsg(fd,from,tmp);
+ }
+ return;
+}
+
 void c_leettail(int fd,char *from,char *file,struct user *user,...) {
  int a;
  int b;
@@ -560,6 +598,7 @@ void c_leettail(int fd,char *from,char *file,struct user *user,...) {
  file_tail(fd,from,file+n,args,d,user);
 }
 
+//crashes on: !changetail filename
 void c_changetail(int fd,char *from,char *line,struct user *user,...) {
  struct stat st;
  char *merp=0;
@@ -1139,12 +1178,9 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
   *command=';';
  }
  //access control goes here
- if(strcmp(user->host,"127.0.0.1") && //me
-    strcmp(myuser->nick,user->nick)
-    ) {
-    return 1;//I want this to claim eatedness.
+ if(!isallowed(from,user,myuser,msg)) {
+   return 1;
  }
-// if(!strncmp(command,"s/",2)) {
 //  command[1]=' ';
 // }
  while(!strncmp(command,"lambda ",7)) {
@@ -1174,8 +1210,8 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
    }
    //sz=(strlen(command)-strlen(m->original)+strlen(m->target)+1);// what is this used for?
 //??? why not use args?
-   redo=format_magic(fd,from,user,m->target,(command+strlen(m->original)+1));
-//   redo=format_magic(fd,from,user,m->target,args);
+//   redo=format_magic(fd,from,user,m->target,(command+strlen(m->original)+1));
+   redo=format_magic(fd,from,user,m->target,args);
    message_handler(fd,from,user,redo,redones+1);
    free(redo);
    redo=0;
@@ -1353,6 +1389,8 @@ int main(int argc,char *argv[]) {
  BUILDIN("aliases",c_aliases_h);
  BUILDIN("lobotomy",c_lobotomy);
  BUILDIN("amnesia",c_amnesia);
+// BUILDIN("peek",c_mem);
+// BUILDIN("poke",c_mem);
  mode_magic=1;
  snooty=0;
  message_handler_trace=0;
