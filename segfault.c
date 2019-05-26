@@ -20,6 +20,7 @@
 //epoch's libraries.
 #include <irc.h>
 #include <hashtable.h>
+#include <idc.h>
 
 #include "access.h"
 
@@ -61,6 +62,9 @@ char *strndup(char *s,int l) {
 #define TAILO_Q_COUT (TAILO_SPAM|TAILO_BEGIN|TAILO_MSG)  //0x20+0x10+0x8 = 32+16+8 = 56
 
 #define PRIVMSG_LINE_LIMIT	0
+
+//dunno if I need this yet.
+extern struct global libline;//???
 
 struct user *myuser;
 char pid[6];
@@ -119,6 +123,7 @@ char *tailmode_to_txt(int mode) {
 }
 
 void mywrite(int fd,char *b) {
+ fprintf(stderr,"writing to %d: %s\n",fd,b);
  int r;
  if(!b || fd <0) return;
  r=write(fd,b,strlen(b));
@@ -351,12 +356,68 @@ void eofp(FILE *fp) {
  clearerr(fp);
 }
 
+void tail_line_handler(int fd,char *line,int tailfd);
+
+void tail_handler(struct shit *me,char *line) {
+  fprintf(stderr,"tail_handler: fd %d got line: %s\n",me->fd,line);
+  tail_line_handler(3,line,me->fd);//HACK. SHOULD NOT HAVE 3 HERE.
+}
+
+void tail_line_handler(int fd,char *line,int tailfd) {//the fd passed to this needs to be the server fd
+  char *tmp=strdup(line);
+  char *tmp2;
+  int i;
+  //need a better way to find this....
+  //for(i=0;i<currentmaxtails;i++) {//god help me.
+  //  if(tailf[i].fp) {
+  //    if(fileno(tailf[i].fp) == tailfd) break;
+  //  }
+  //}
+  //if(i == currentmaxtails) return;//failed to find this tail.
+  i=tailfd;//see hack about "durr I forgot I did this" in file_tail
+  //tail_line_handler cn be used in both tail_handler and extra_handler now.
+     //tailf[i].lines++;
+     if(tailf[i].opt & TAILO_EVAL) {//eval
+      if(tailf[i].opt & TAILO_FORMAT) {
+       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);//the line read is the format string.
+       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,1);
+       free(tmp2);
+      } else {
+       //this will crash.
+       tmp2=strdup(tmp);
+       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,1);
+       //printf("tmp2 in crashing place: %p\n",tmp2);
+      }
+      //printf("OHAI. WE SURVIVED!\n");
+     }
+     if(tailf[i].opt & TAILO_RAW) {//raw
+      tmp2=malloc(strlen(tmp)+4);
+      snprintf(tmp2,strlen(tmp)+3,"%s\r\n",tmp);
+      fprintf(stderr,"attempting to write raw to %d: %s\n",fd,tmp);
+      mywrite(fd,tmp2);
+      free(tmp2);
+     }
+     if(tailf[i].opt & TAILO_MSG) {//just msg the lines.
+      if(tailf[i].opt & TAILO_FORMAT && tailf[i].args) {
+       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tailf[i].args,tmp);//the args is the format string.
+       privmsg(fd,tailf[i].to,tmp2);
+      } else {
+       privmsg(fd,tailf[i].to,tmp);
+      }
+     }
+     //if(tailf[i].lines >= line_limit && (tailf[i].opt & TAILO_SPAM)) {
+     // tailf[i].lines=-1; //lock it.
+     // privmsg(fd,tailf[i].to,"--more--");
+     //}
+  free(tmp);
+}
+
 //this function got scary. basically handles all the tail magic.
 //feature creature
 void extra_handler(int fd) {
  int tmpo,i;
- char tmp[BS+1];
- char *tmp2;
+// char tmp[BS+1];
+// char *tmp2;
  //if(oldtime == time(0) && lines_sent > LINES_SENT_LIMIT) {//if it is still the same second, skip this function.
  // return;
  //} else {
@@ -385,6 +446,7 @@ void extra_handler(int fd) {
     fseek(tailf[i].fp,tmpo,SEEK_SET);//???
    }
    if(tailf[i].lines != -1) {//if the tail isn't locked due to spam limit.
+/*
     if(fgets(tmp,BS-1,tailf[i].fp) == NULL) {//if there isn't anything to read right now...
      if(tailf[i].lines != 0 && (tailf[i].opt & TAILO_ENDMSG)) {
       privmsg(fd,tailf[i].to,"---------- TAILO_ENDMSG border ----------");
@@ -394,41 +456,8 @@ void extra_handler(int fd) {
      tailf[i].lines=0;
     }
     else {//if there was something to read.
-     tailf[i].lines++;
-     if(strchr(tmp,'\r')) *strchr(tmp,'\r')=0;
-     if(strchr(tmp,'\n')) *strchr(tmp,'\n')=0;
-     if(tailf[i].opt & TAILO_EVAL) {//eval
-      if(tailf[i].opt & TAILO_FORMAT) {
-       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);//the line read is the format string.
-       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,1);
-       free(tmp2);
-      } else {
-       //this will crash.
-       tmp2=strdup(tmp);
-       message_handler(fd,tailf[i].to,tailf[i].user,tmp2,1);
-       //printf("tmp2 in crashing place: %p\n",tmp2);
-      }
-      //printf("OHAI. WE SURVIVED!\n");
-     }
-     if(tailf[i].opt & TAILO_RAW) {//raw
-      tmp2=malloc(strlen(tmp)+4);
-      snprintf(tmp2,strlen(tmp)+3,"%s\r\n",tmp);
-      mywrite(fd,tmp2);
-      free(tmp2);
-     }
-     if(tailf[i].opt & TAILO_MSG) {//just msg the lines.
-      if(tailf[i].opt & TAILO_FORMAT && tailf[i].args) {
-       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tailf[i].args,tmp);//the args is the format string.
-       privmsg(fd,tailf[i].to,tmp2);
-      } else {
-       privmsg(fd,tailf[i].to,tmp);
-      }
-     }
-     if(tailf[i].lines >= line_limit && (tailf[i].opt & TAILO_SPAM)) {
-      tailf[i].lines=-1; //lock it.
-      privmsg(fd,tailf[i].to,"--more--");
-     }
-    }
+     tail_line_handler(fileno(tailf[i].fp),tmp);
+    }*/
    } else {
     //don't PM in here. shows a LOT of shit.
    }
@@ -439,7 +468,7 @@ void extra_handler(int fd) {
 void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user) {
  int i;
  int fdd;
- char tmp[256];
+// char tmp[256];//?? this wasn't used for some reason
  struct stat st;
  if(*file == '#') {
   from=file;
@@ -449,15 +478,16 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   }
  }
  if((fdd=open(file,O_RDONLY|O_NONBLOCK,0)) == -1) {
-  snprintf(tmp,sizeof(tmp)-1,"file_tail: %s: (%s) fd:%d",strerror(errno),file,fdd);
-  privmsg(fd,"#cmd",tmp);
+// if((fdd=open(file,O_RDONLY,0)) == -1) {
+//  snprintf(tmp,sizeof(tmp)-1,"file_tail: %s: (%s) fd:%d",strerror(errno),file,fdd);
+//  privmsg(fd,"#cmd",tmp);
   return;
  }
  if(debug) {
-  snprintf(tmp,sizeof(tmp)-1,"file_tail opened file '%s' with fd: %d / %d / %d",file,fdd,currentmaxtails,maxtails);
-  privmsg(fd,"#cmd",tmp);
+//  snprintf(tmp,sizeof(tmp)-1,"file_tail opened file '%s' with fd: %d / %d / %d",file,fdd,currentmaxtails,maxtails);
+//  privmsg(fd,"#cmd",tmp);
  }
- fstat(fdd,&st); // <-- is this needed?
+ fstat(fdd,&st); // <-- is this needed? yes. inode gets set later.
  /*
  for(j=0;j<maxtails;j++) {
   if(tailf[j].fp && tailf[j].file && tailf[j].inode) {
@@ -467,20 +497,20 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
     //return;//don't tail files twice
     //;just add another tail for it
  }}}*/
- i=fdd;//hack hack hack. :P //I forgot I was using this.
- if(i >= currentmaxtails) { currentmaxtails=i+1;}
+ i=fdd;//hack hack hack. :P //I forgot I was using this. WHO CARES?!?
+ if(i >= currentmaxtails) { currentmaxtails=i+1;}//not needed anymore?
  if(!(tailf[i].fp=fdopen(fdd,"r"))) {
-  snprintf(tmp,sizeof(tmp),"file_tail: failed to fdopen(%s)\n",file);
-  privmsg(fd,from,tmp);
+//  snprintf(tmp,sizeof(tmp),"file_tail: failed to fdopen(%s)\n",file);
+//  privmsg(fd,from,tmp);
  } else {
-  fcntl(fdd,F_SETFL,O_NONBLOCK);
+  fcntl(fdd,F_SETFL,O_RDONLY);
   if(!(opt & TAILO_BEGIN)) {
    eofp(tailf[i].fp);
   }
   if(!from) exit(73);
   if(tailf[i].to) {
-   snprintf(tmp,sizeof(tmp),"tailf[%d].to: %s from: %s",i,tailf[i].to,from);
-   privmsg(fd,"#default",tmp);
+//   snprintf(tmp,sizeof(tmp),"tailf[%d].to: %s from: %s",i,tailf[i].to,from);
+//   privmsg(fd,"#default",tmp);
    free(tailf[i].to); //commenting this out stopped a buffer overflow. >_> weird.
    tailf[i].to=0;
   }
@@ -513,6 +543,9 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
    }
   }
   tailf[i].lines=0;
+  i=add_fd(fdd,tail_handler);//returns the index.
+  libline.fds[i].keep_open=!(opt & TAILO_CLOSE);
+//  libline.fds[i].extra_info=tailf[fdd];//we need this somehow.
  }
 }
 
@@ -622,10 +655,12 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
   }
  }
  if((fdd=open(line,O_RDONLY|O_NONBLOCK,0)) == -1) {
+// if((fdd=open(line,O_RDONLY,0)) == -1) {
   snprintf(tmp,sizeof(tmp)-1,"changetail: %s: (%s) fd:%d",strerror(errno),line,fdd);
   privmsg(fd,"#cmd",tmp);
   return;
  }
+ fcntl(fdd,F_SETFL,O_RDONLY);
  if(debug) {
   snprintf(tmp,sizeof(tmp)-1,"changetail opened file '%s' with fd: %d / %d / %d\n",line,fdd,currentmaxtails,maxtails);
   privmsg(fd,"#cmd",tmp);
@@ -912,6 +947,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
 // derp[1]=0;
  if(line == 0) return mywrite(fd,"QUIT :line == 0 in append_file\r\n"),-1;
  if((fdd=open(file,O_WRONLY|O_NONBLOCK|O_APPEND|O_CREAT,0640)) == -1) {
+// if((fdd=open(file,O_WRONLY|O_APPEND|O_CREAT,0640)) == -1) {
   snprintf(tmp,sizeof(tmp)-1,"append_file: %s: (%s) fd:%d",strerror(errno),file,fdd);
   privmsg(fd,from,tmp);
   return 0;
@@ -926,7 +962,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   privmsg(fd,from,strerror(errno));
   return 0;
  }
- fcntl(fileno(fp),F_SETFL,O_NONBLOCK);
+ fcntl(fileno(fp),F_SETFL,O_WRONLY|O_APPEND|O_CREAT);
  eofp(fp);
  fprintf(fp,"%s\n",line);
  fclose(fp);
@@ -965,6 +1001,9 @@ void c_tails(int fd,char *from,...) {
  int l;
  int at_least_one=0;
  char *tmp,*x;
+ char derp[512];
+ snprintf(derp,sizeof(derp),"currentmaxtails: %d",currentmaxtails);
+ privmsg(fd,from,derp);
  for(i=0;i<currentmaxtails;i++) {
   if(tailf[i].fp) {
    at_least_one=1;
@@ -1139,7 +1178,7 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  char to_me;
  int len;
 // int sz;
-// printf("message_handler: entry: message: '%s' redones: %d\n",msg,redones);
+ printf("message_handler: entry: message: '%s' redones: %d\n",msg,redones);
  if(redones && message_handler_trace) {
   snprintf(tmp,sizeof(tmp)-1,"trace: n: %s u: %s h: %s message '%s' redones: '%d'",user->nick,user->user,user->host,msg,redones);
   privmsg(fd,from,tmp);
@@ -1357,6 +1396,11 @@ void sigpipe_handler(int sig) {
 }
 
 int main(int argc,char *argv[]) {
+ libline.shitlen=0;
+ int i;
+ for(i=0;i<100;i++) {//fuckme
+  libline.fds[i].fd=-1;
+ }
  signal(SIGSTOP,exit);//prevent pausing
  signal(SIGPIPE,sigpipe_handler);
  int fd;
