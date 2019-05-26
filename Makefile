@@ -1,5 +1,5 @@
-LDFLAGS=-lirc -lhashtable -L/usr/local/lib
-CFLAGS=-std=c99 -pedantic -Wall -ggdb -I/usr/local/include
+LDFLAGS=-L/usr/local/lib -L/home/pi/.local/lib -lirc -lhashtable -lgcc_s -lidc
+CFLAGS=-pedantic -Wall -ggdb -I/usr/local/include -I/home/pi/.local/include
 
 all: segfault
 
