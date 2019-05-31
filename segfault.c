@@ -358,9 +358,10 @@ void eofp(FILE *fp) {
 
 void tail_line_handler(int fd,char *line,int tailfd);
 
-void tail_handler(struct shit *me,char *line) {
+void tail_handler(struct shit *me,char *line) {//how how call this with line of NULL to signal EOF
   fprintf(stderr,"tail_handler: fd %d got line: %s\n",me->fd,line);
-  tail_line_handler(3,line,me->fd);//HACK. SHOULD NOT HAVE 3 HERE.
+  if(line) tail_line_handler(3,line,me->fd);//HACK. SHOULD NOT HAVE 3 HERE.
+  else tailf[me->fd].fp=0;
 }
 
 void tail_line_handler(int fd,char *line,int tailfd) {//the fd passed to this needs to be the server fd
@@ -412,6 +413,7 @@ void tail_line_handler(int fd,char *line,int tailfd) {//the fd passed to this ne
   free(tmp);
 }
 
+#if 0
 //this function got scary. basically handles all the tail magic.
 //feature creature
 void extra_handler(int fd) {
@@ -446,6 +448,7 @@ void extra_handler(int fd) {
     fseek(tailf[i].fp,tmpo,SEEK_SET);//???
    }
    if(tailf[i].lines != -1) {//if the tail isn't locked due to spam limit.
+
 /*
     if(fgets(tmp,BS-1,tailf[i].fp) == NULL) {//if there isn't anything to read right now...
      if(tailf[i].lines != 0 && (tailf[i].opt & TAILO_ENDMSG)) {
@@ -464,6 +467,7 @@ void extra_handler(int fd) {
   }
  }
 }
+#endif
 
 void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user) {
  int i;
@@ -477,7 +481,9 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
    file++;
   }
  }
- if((fdd=open(file,O_RDONLY|O_NONBLOCK,0)) == -1) {
+ if((fdd=open(file,O_RDWR|O_NONBLOCK,0)) == -1) {
+// if((fdd=open(file,O_RDONLY|O_NONBLOCK,0)) == -1) {
+  fprintf(stderr,"file_tail failed for %s\n",file);
 // if((fdd=open(file,O_RDONLY,0)) == -1) {
 //  snprintf(tmp,sizeof(tmp)-1,"file_tail: %s: (%s) fd:%d",strerror(errno),file,fdd);
 //  privmsg(fd,"#cmd",tmp);
@@ -499,11 +505,11 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
  }}}*/
  i=fdd;//hack hack hack. :P //I forgot I was using this. WHO CARES?!?
  if(i >= currentmaxtails) { currentmaxtails=i+1;}//not needed anymore?
- if(!(tailf[i].fp=fdopen(fdd,"r"))) {
+ if(!(tailf[i].fp=fdopen(fdd,"r+"))) {
 //  snprintf(tmp,sizeof(tmp),"file_tail: failed to fdopen(%s)\n",file);
 //  privmsg(fd,from,tmp);
  } else {
-  fcntl(fdd,F_SETFL,O_RDONLY);
+  fcntl(fdd,F_SETFL,O_RDWR);
   if(!(opt & TAILO_BEGIN)) {
    eofp(tailf[i].fp);
   }
@@ -956,6 +962,12 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   snprintf(tmp,sizeof(tmp)-1,"append_file opened file '%s' with fd: %d / %d / %d\n",file,fdd,currentmaxtails,maxtails);
   privmsg(fd,"#cmd",tmp);
  }
+ fcntl(fdd,F_SETFL,O_WRONLY|O_APPEND|O_CREAT);
+ dprintf(fdd,"%s\n",line);
+ close(fdd);
+// if((fdd=open(file,O_WRONLY|O_APPEND|O_CREAT,0640)) == -1) {}
+// close(fdd);
+/*
  if(!(fp=fdopen(fdd,"a"))) {
   snprintf(tmp,sizeof(tmp)-1,"Couldn't fdopen file (%s) fd:%d for appending.",file,fdd);
   privmsg(fd,from,tmp);
@@ -963,9 +975,11 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   return 0;
  }
  fcntl(fileno(fp),F_SETFL,O_WRONLY|O_APPEND|O_CREAT);
- eofp(fp);
+ //eofp(fp);
  fprintf(fp,"%s\n",line);
  fclose(fp);
+ close(fdd);
+*/
  return 1;
 }
 
@@ -1014,7 +1028,7 @@ void c_tails(int fd,char *from,...) {
     return;
    }
    x=tailmode_to_txt(tailf[i].opt);
-   snprintf(tmp,l,"%s [i:%d] @ %ld (%d) --[%s(%03u)]--> %s",tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to);
+   snprintf(tmp,l,"%d %s [i:%d] @ %ld (%d) --[%s(%03u)]--> %s",fileno(tailf[i].fp),tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to);
    free(x);
    privmsg(fd,from,tmp);
    free(tmp);
@@ -1490,5 +1504,5 @@ int main(int argc,char *argv[]) {
  prestartup_stuff(fd);
  if(fd == -1) return 0;
  printf("server fd: %d\n",fd);
- return runit(fd,line_handler,extra_handler);
+ return runit(fd,line_handler,0);
 }
