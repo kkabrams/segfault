@@ -1272,7 +1272,7 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  }
  //access control goes here
  if(!isallowed(from,user,myuser,msg)) {
- //  return 1;
+   return 1;
  }
 //  command[1]=' ';
 // }
@@ -1488,7 +1488,7 @@ int main(int argc,char *argv[]) {
  BUILDIN("aliases",c_aliases_h);
  BUILDIN("lobotomy",c_lobotomy);
  BUILDIN("amnesia",c_amnesia);
- BUILDIN("addserver",c_addserver);
+// BUILDIN("addserver",c_addserver);
 // BUILDIN("peek",c_mem);
 // BUILDIN("poke",c_mem);
  mode_magic=1;
