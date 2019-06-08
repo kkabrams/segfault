@@ -58,6 +58,7 @@ char *strndup(char *s,int l) {
 #define TAILO_SPAM   32 // s Spam control is enabled for this stream.
 #define TAILO_ENDMSG 64 // n show a message when the tail reaches the end of a chunk
 #define TAILO_FORMAT 128// f formatting?
+#define TAILO_ONCE   256// 1 only open this file once. namedpipes need this
 #define TAILO_Q_EVAL (TAILO_EVAL|TAILO_CLOSE|TAILO_BEGIN) //0x2+0x4+0x10 = 2+4+16  = 22
 #define TAILO_Q_COUT (TAILO_SPAM|TAILO_BEGIN|TAILO_MSG)  //0x20+0x10+0x8 = 32+16+8 = 56
 
@@ -99,6 +100,7 @@ struct tail {
  char *file;
  char *to;
  char *args;
+ int srcfd;//where messages are sent back to.
  struct user *user;
  unsigned short opt;
  unsigned int inode;
@@ -112,7 +114,7 @@ void c_leetuntail(int fd,char *from,char *line,...);
 
 //this function isn't with the rest of them because... meh.
 char *tailmode_to_txt(int mode) {
- char *modes="recmbsnf";
+ char *modes="recmbsnf1";
  int i,j=0;
  char *m=malloc(strlen(modes));
  for(i=0;i<strlen(modes);i++)
@@ -125,9 +127,20 @@ char *tailmode_to_txt(int mode) {
 void mywrite(int fd,char *b) {
  fprintf(stderr,"writing to %d: %s\n",fd,b);
  int r;
+// int f;
  if(!b || fd <0) return;
+// f=fcntl(fd,F_GETFL);
+// fcntl(fd,F_SETFL,O_NONBLOCK|f);//kek
+// errno=0;
+// fprintf(stderr,"about to write to %d\n",fd);
  r=write(fd,b,strlen(b));
- if(r == -1) exit(1);
+// fprintf(stderr,"after write to %d. ret: %d\n",fd,r);
+// fcntl(fd,F_SETFL,f);
+ if(r == -1) {
+   fprintf(stderr,"mywrite failed. %s\n",strerror(errno));
+   return;
+   //exit(1);
+ }
  if(r != strlen(b)) exit(2);
  lines_sent++;
 }
@@ -359,8 +372,12 @@ void eofp(FILE *fp) {
 void tail_line_handler(int fd,char *line,int tailfd);
 
 void tail_handler(struct shit *me,char *line) {//how how call this with line of NULL to signal EOF
-  fprintf(stderr,"tail_handler: fd %d got line: %s\n",me->fd,line);
-  if(line) tail_line_handler(3,line,me->fd);//HACK. SHOULD NOT HAVE 3 HERE.
+  fprintf(stderr,"tail_handler: fd %d->%d got line: %s\n",me->fd,tailf[me->fd].srcfd,line);
+  if(line) {
+    fprintf(stderr,"about to tail_line_handler");
+    tail_line_handler(tailf[me->fd].srcfd,line,me->fd);//HACK. SHOULD NOT HAVE 3 HERE. //what /should/ it have?
+    fprintf(stderr,"back from tail_line_handler");
+  }
   else tailf[me->fd].fp=0;
 }
 
@@ -470,7 +487,7 @@ void extra_handler(int fd) {
 #endif
 
 void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user) {
- int i;
+ int i,j;
  int fdd;
 // char tmp[256];//?? this wasn't used for some reason
  struct stat st;
@@ -494,15 +511,17 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
 //  privmsg(fd,"#cmd",tmp);
  }
  fstat(fdd,&st); // <-- is this needed? yes. inode gets set later.
- /*
- for(j=0;j<maxtails;j++) {
-  if(tailf[j].fp && tailf[j].file && tailf[j].inode) {
-   if(tailf[j].inode == st.st_ino) {
-    if(debug) privmsg(fd,from,"THIS FILE IS ALREADY BEING TAILED ELSEWHERE!");
-    //i=j;break;//reuse it. make sure to add free()ing code for this.
-    //return;//don't tail files twice
-    //;just add another tail for it
- }}}*/
+ if(opt & TAILO_ONCE) {
+  for(j=0;j<maxtails;j++) {//is this still a good loop?
+   if(tailf[j].fp && tailf[j].file && tailf[j].inode) {
+    if(tailf[j].inode == st.st_ino) {
+     fprintf(stderr,"FILE ATTEMPTED TO BE TAILTED TWICE %s\n",file);
+     if(debug) privmsg(fd,from,"THIS FILE IS ALREADY BEING TAILED ELSEWHERE!");
+     //i=j;break;//reuse it. make sure to add free()ing code for this.
+     return;//don't tail files twice
+     //;just add another tail for it
+  }}}
+ }
  i=fdd;//hack hack hack. :P //I forgot I was using this. WHO CARES?!?
  if(i >= currentmaxtails) { currentmaxtails=i+1;}//not needed anymore?
  if(!(tailf[i].fp=fdopen(fdd,"r+"))) {
@@ -549,12 +568,27 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
    }
   }
   tailf[i].lines=0;
+  tailf[i].srcfd=fd;//this is like tailf[i].to //maybe combine somehow?
   i=add_fd(fdd,tail_handler);//returns the index.
   libline.fds[i].keep_open=!(opt & TAILO_CLOSE);
 //  libline.fds[i].extra_info=tailf[fdd];//we need this somehow.
  }
 }
 
+void c_addserver(int fd,char *from,char *line,...) {
+  int fdd;
+  char *port=strchr(line,' ');
+  if(!port) port="6667";
+  else {*port=0;port++;}
+  fprintf(stderr,"attempting to connect to %s:%s\n",line,port);
+  fdd=serverConnect(line,port);
+  fprintf(stderr,"connected! fd:%d\n",fdd);
+  if(fdd == -1) {
+    return;//failed
+  }
+  prestartup_stuff(fdd);
+  add_fd(fdd,irc_handler);
+}
 
 void c_botup(int fd,char *from,...) {
  char tmp[256];
@@ -682,8 +716,9 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
     tailf[i].user=user;//memory leak?
     if(!merp) exit(76);
     tailf[i].to=strdup(merp);
+    tailf[i].srcfd=fd;
     if(mode) {
-     tailf[i].opt=((mode[0]-'0')*10)+(mode[1]-'0');
+     tailf[i].opt=atoi(mode);//((mode[0]-'0')*10)+(mode[1]-'0');
     }
     return;
    }
@@ -952,7 +987,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
 // derp[0]=(char)nl;
 // derp[1]=0;
  if(line == 0) return mywrite(fd,"QUIT :line == 0 in append_file\r\n"),-1;
- if((fdd=open(file,O_WRONLY|O_NONBLOCK|O_APPEND|O_CREAT,0640)) == -1) {
+ if((fdd=open(file,O_WRONLY|O_NONBLOCK|O_APPEND|O_CREAT,0640)) == -1) {//lolwat?
 // if((fdd=open(file,O_WRONLY|O_APPEND|O_CREAT,0640)) == -1) {
   snprintf(tmp,sizeof(tmp)-1,"append_file: %s: (%s) fd:%d",strerror(errno),file,fdd);
   privmsg(fd,from,tmp);
@@ -962,8 +997,10 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   snprintf(tmp,sizeof(tmp)-1,"append_file opened file '%s' with fd: %d / %d / %d\n",file,fdd,currentmaxtails,maxtails);
   privmsg(fd,"#cmd",tmp);
  }
- fcntl(fdd,F_SETFL,O_WRONLY|O_APPEND|O_CREAT);
- dprintf(fdd,"%s\n",line);
+ mywrite(fdd,line);
+ mywrite(fdd,&nl);//kek
+// dprintf(fdd,"%s\n",line);
+// fcntl(fdd,F_SETFL,O_WRONLY|O_APPEND|O_CREAT);
  close(fdd);
 // if((fdd=open(file,O_WRONLY|O_APPEND|O_CREAT,0640)) == -1) {}
 // close(fdd);
@@ -1028,7 +1065,7 @@ void c_tails(int fd,char *from,...) {
     return;
    }
    x=tailmode_to_txt(tailf[i].opt);
-   snprintf(tmp,l,"%d %s [i:%d] @ %ld (%d) --[%s(%03u)]--> %s",fileno(tailf[i].fp),tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to);
+   snprintf(tmp,l,"%d->%d %s [i:%d] @ %ld (%d) --[%s(%03u)]--> %s",fileno(tailf[i].fp),tailf[i].srcfd,tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to);
    free(x);
    privmsg(fd,from,tmp);
    free(tmp);
@@ -1235,7 +1272,7 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  }
  //access control goes here
  if(!isallowed(from,user,myuser,msg)) {
-   return 1;
+ //  return 1;
  }
 //  command[1]=' ';
 // }
@@ -1406,7 +1443,8 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
 }
 
 void sigpipe_handler(int sig) {
- syslog(LOG_WARNING,"SegFault received a sigpipe! (ignoring it)");
+// syslog(LOG_WARNING,"SegFault received a sigpipe! (ignoring it)");
+ fprintf(stderr,"SegFault received a sigpipe! (ignoring it)");
 }
 
 int main(int argc,char *argv[]) {
@@ -1417,7 +1455,7 @@ int main(int argc,char *argv[]) {
  }
  signal(SIGSTOP,exit);//prevent pausing
  signal(SIGPIPE,sigpipe_handler);
- int fd;
+ int fds[10];
  srand(time(0) + getpid());
  struct passwd *pwd;
  struct rlimit nofile;
@@ -1450,6 +1488,7 @@ int main(int argc,char *argv[]) {
  BUILDIN("aliases",c_aliases_h);
  BUILDIN("lobotomy",c_lobotomy);
  BUILDIN("amnesia",c_amnesia);
+ BUILDIN("addserver",c_addserver);
 // BUILDIN("peek",c_mem);
 // BUILDIN("poke",c_mem);
  mode_magic=1;
@@ -1494,15 +1533,19 @@ int main(int argc,char *argv[]) {
  s=getenv("segserver"); s=s?s:SERVER;
  p=getenv("segport"); p=p?p:PORT;
  printf("connecting to: %s port %s\n",s,p);
- fd=serverConnect(getenv("segserver")?getenv("segserver"):SERVER,
+ fds[0]=serverConnect(getenv("segserver")?getenv("segserver"):SERVER,
                   getenv("segport")?getenv("segport"):PORT);
 //               myuser->nick,
 //               "segfault segfault segfault :segfault");
+ fds[1]=serverConnect("127.0.0.1","6667");
+ fds[2]=-1;
  printf("cd %s\n",pwd->pw_dir);
  chdir(getenv("seghome")?getenv("seghome"):pwd->pw_dir);
  getcwd(seghome,SEGHOMELEN);
- prestartup_stuff(fd);
- if(fd == -1) return 0;
- printf("server fd: %d\n",fd);
- return runit(fd,line_handler,0);
+ if(fds[0] == -1) return fprintf(stderr,"fds[0] == -1\n"),1;
+ if(fds[1] == -1) return fprintf(stderr,"fds[1] == -1\n"),2;
+ prestartup_stuff(fds[0]);
+ prestartup_stuff(fds[1]);
+ printf("server fd: %d\n",fds[0]);
+ return runem(fds,line_handler,0);
 }
