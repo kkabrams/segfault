@@ -65,7 +65,7 @@ char *strndup(char *s,int l) {
 #define PRIVMSG_LINE_LIMIT	0
 
 //dunno if I need this yet.
-extern struct global libline;//???
+extern struct idc_global idc;//???
 
 struct user *myuser;
 char pid[6];
@@ -242,8 +242,10 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  char *output,*fmt,*argCopy;
  char *plzhold;
  char **args,**notargs;
+ char fd_str[10];
  char *argN[10],randC[10][2]={"0","1","2","3","4","5","6","7","8","9"};
  snprintf(time_str,sizeof(time_str)-1,"%ld",time(0));//time_t on Linux is long int?
+ snprintf(fd_str,sizeof(fd_str)-1,"%d",fd);
  for(i=0;i<256;i++) {
   magic[i]=0;
  }
@@ -269,14 +271,15 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   argN[j]="(null)";//fill up the rest to prevent null deref.
  }
 
- magic['r']=(char *)-1;//magic!
- magic['$']=(char *)-2;//more magic!
+ //magic['r']=(char *)-1;//magic!
+ //magic['$']=(char *)-2;//more magic!
  magic['n']=(user->nick?user->nick:"user->nick");
  magic['u']=(user->user?user->user:"user->user");
  magic['h']=(user->host?user->host:"user->host");
  magic['m']=(myuser->nick?myuser->nick:"myuser->nick");
  magic['~']=seghome;
  magic['f']=(from?from:"from");
+ magic['F']=fd_str;
  magic['p']=pid;
  magic['t']=time_str;
  magic['s']=(arg?arg:"arg");
@@ -311,9 +314,9 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   if(fmt[i] == '%') {
    i++;
    d=1;
-   if((int)magic[(unsigned char)fmt[i]] == -1) {
+   if(fmt[i] == 'r') {
     args[c]=randC[rand()%10];
-   } else if((int)magic[(unsigned char)fmt[i]] == -2) {
+   } else if(fmt[i] == '$') {
     if((plzhold=strchr(fmt+i+1,'='))) {
      *plzhold=0;
      args[c]=getenv(fmt+i+1);
@@ -323,7 +326,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
     } else {
      args[c]="BROKEN ENV VAR REFERENCE";
     }
-   } else if((int)magic[(unsigned char)fmt[i]] > 0) {
+   } else if(magic[(unsigned char)fmt[i]]) {
     args[c]=magic[(unsigned char)fmt[i]];
    } else {
     args[c]="INVALID MAGIC";
@@ -570,8 +573,8 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   tailf[i].lines=0;
   tailf[i].srcfd=fd;//this is like tailf[i].to //maybe combine somehow?
   i=add_fd(fdd,tail_handler);//returns the index.
-  libline.fds[i].keep_open=!(opt & TAILO_CLOSE);
-//  libline.fds[i].extra_info=tailf[fdd];//we need this somehow.
+  idc.fds[i].keep_open=!(opt & TAILO_CLOSE);
+//  idc.fds[i].extra_info=tailf[fdd];//we need this somehow.
  }
 }
 
@@ -1392,7 +1395,11 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    //privmsg(fd,"#cmd",a[0]);
   //}
   if(!strcmp(a[0],"JOIN")) {
-   irc_mode(fd,a[1],"+o",user->nick);
+   if(isallowed("", user, myuser,"")) {
+    irc_mode(fd,a[1],"+o",user->nick);
+   } else {
+    irc_mode(fd,a[1],"+v",user->nick);
+   }
   }
 //  if(!strcmp(a[0],"KICK") && !strcmp(a[2],"epoch") && strcmp(user->nick,myuser->nick)) {
 //   snprintf(tmp,sizeof(tmp)-1,"KILL %s :don't fuck with my bro.\r\n",user->nick);
@@ -1448,10 +1455,10 @@ void sigpipe_handler(int sig) {
 }
 
 int main(int argc,char *argv[]) {
- libline.shitlen=0;
+ idc.shitlen=0;
  int i;
  for(i=0;i<100;i++) {//fuckme
-  libline.fds[i].fd=-1;
+  idc.fds[i].fd=-1;
  }
  signal(SIGSTOP,exit);//prevent pausing
  signal(SIGPIPE,sigpipe_handler);
