@@ -16,11 +16,12 @@
 #include <signal.h>
 #include <syslog.h>
 #include <grp.h> //setgroups
+#include <dlfcn.h>
 
 //epoch's libraries.
+#include <idc.h>
 #include <irc.h>
 #include <hashtable.h>
-#include <idc.h>
 
 #include "access.h"
 
@@ -236,6 +237,8 @@ char *escahack(char *s) {//for single quotes
 }
 
 //try to shorten this up sometime...
+char format_helptext[256];
+
 char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg) {
  char *magic[256];
  int i=0,j=1,sz=0,c=1,d=0;
@@ -271,8 +274,9 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
   argN[j]="(null)";//fill up the rest to prevent null deref.
  }
 
- //magic['r']=(char *)-1;//magic!
- //magic['$']=(char *)-2;//more magic!
+ magic['?']=format_helptext;
+ magic['r']="magic";//magic!
+ magic['$']="magic";//more magic!
  magic['n']=(user->nick?user->nick:"user->nick");
  magic['u']=(user->user?user->user:"user->user");
  magic['h']=(user->host?user->host:"user->host");
@@ -284,6 +288,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  magic['t']=time_str;
  magic['s']=(arg?arg:"arg");
  magic['A']="\x01";//for ctcp and action
+ magic['B']="\x02";//for bold
  magic['C']="\x03";//for colors
  magic['0']=argN[0];
  magic['1']=argN[1];
@@ -298,6 +303,16 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  magic['q']=(arg && strlen(arg)?escahack(arg):"");
  magic['Q']=(arg && strlen(arg)?esca(arg,"\""):"");
  magic['%']="%";
+ if(!format_helptext[0]) {
+   j=0;
+   for(i=0;i<256;i++) {
+     if(magic[i]) {
+       format_helptext[j]=i;
+       j++;
+     }
+   }
+   format_helptext[j]=0;
+ }
 
  if(!orig_fmt) return 0;
  if(!(fmt=strdup(orig_fmt))) return 0;
@@ -375,18 +390,21 @@ void eofp(FILE *fp) {
 void tail_line_handler(int fd,char *line,int tailfd);
 
 void tail_handler(struct shit *me,char *line) {//how how call this with line of NULL to signal EOF
-  fprintf(stderr,"tail_handler: fd %d->%d got line: %s\n",me->fd,tailf[me->fd].srcfd,line);
+//  fprintf(stderr,"tail_handler: fd %d->%d got line: %s\n",me->fd,tailf[me->fd].srcfd,line);
   if(line) {
-    fprintf(stderr,"about to tail_line_handler");
+//    fprintf(stderr,"about to tail_line_handler");
     tail_line_handler(tailf[me->fd].srcfd,line,me->fd);//HACK. SHOULD NOT HAVE 3 HERE. //what /should/ it have?
-    fprintf(stderr,"back from tail_line_handler");
+//    fprintf(stderr,"back from tail_line_handler");
   }
   else tailf[me->fd].fp=0;
 }
 
+void c_raw(int fd,char *from,char *msg,struct user *user);//don't want to shuffle functions around, so just putting this here.
+
 void tail_line_handler(int fd,char *line,int tailfd) {//the fd passed to this needs to be the server fd
   char *tmp=strdup(line);
   char *tmp2;
+//  char *tmp3;
   int i;
   //need a better way to find this....
   //for(i=0;i<currentmaxtails;i++) {//god help me.
@@ -412,11 +430,25 @@ void tail_line_handler(int fd,char *line,int tailfd) {//the fd passed to this ne
       //printf("OHAI. WE SURVIVED!\n");
      }
      if(tailf[i].opt & TAILO_RAW) {//raw
-      tmp2=malloc(strlen(tmp)+4);
-      snprintf(tmp2,strlen(tmp)+3,"%s\r\n",tmp);
-      fprintf(stderr,"attempting to write raw to %d: %s\n",fd,tmp);
-      mywrite(fd,tmp2);
-      free(tmp2);
+      if(tailf[i].opt & TAILO_FORMAT && tailf[i].args) {
+       tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tailf[i].args,tmp);//the args is the format string.
+
+       //tmp3=malloc(strlen(tmp2)+4);
+       //snprintf(tmp3,strlen(tmp2)+3,"%s",tmp2);
+       fprintf(stderr,"attempting to write raw to %d: %s\n",fd,tmp2);
+       c_raw(fd,tailf[i].to,tmp2,tailf[i].user);//???
+       //mywrite(fd,tmp3);
+       //free(tmp3);
+
+       free(tmp2);
+      } else {
+       tmp2=malloc(strlen(tmp)+4);
+       snprintf(tmp2,strlen(tmp)+3,"%s\r\n",tmp);
+       fprintf(stderr,"attempting to write raw to %d: %s\n",fd,tmp);
+       //mywrite(fd,tmp2);
+       c_raw(fd,tailf[i].to,tmp2,tailf[i].user);
+       free(tmp2);
+      }
      }
      if(tailf[i].opt & TAILO_MSG) {//just msg the lines.
       if(tailf[i].opt & TAILO_FORMAT && tailf[i].args) {
@@ -492,7 +524,7 @@ void extra_handler(int fd) {
 void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user) {
  int i,j;
  int fdd;
-// char tmp[256];//?? this wasn't used for some reason
+ char tmp[512];
  struct stat st;
  if(*file == '#') {
   from=file;
@@ -501,12 +533,12 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
    file++;
   }
  }
- if((fdd=open(file,O_RDWR|O_NONBLOCK,0)) == -1) {
+ if((fdd=open(file,O_RDONLY|O_NONBLOCK,0)) == -1) {//we only need RDWR if we're opening a named pipe
 // if((fdd=open(file,O_RDONLY|O_NONBLOCK,0)) == -1) {
-  fprintf(stderr,"file_tail failed for %s\n",file);
+//  fprintf(stderr,"file_tail failed for %s\n",file);
 // if((fdd=open(file,O_RDONLY,0)) == -1) {
-//  snprintf(tmp,sizeof(tmp)-1,"file_tail: %s: (%s) fd:%d",strerror(errno),file,fdd);
-//  privmsg(fd,"#cmd",tmp);
+  snprintf(tmp,sizeof(tmp)-1,"file_tail: %s: (%s) fd:%d",strerror(errno),file,fdd);
+  privmsg(fd,"#cmd",tmp);
   return;
  }
  if(debug) {
@@ -514,7 +546,38 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
 //  privmsg(fd,"#cmd",tmp);
  }
  fstat(fdd,&st); // <-- is this needed? yes. inode gets set later.
- if(opt & TAILO_ONCE) {
+ i=fdd;
+ if(i >= currentmaxtails) { currentmaxtails=i+1;}//not needed anymore?
+
+ switch(st.st_mode & S_IFMT) {
+   case S_IFIFO:
+     //fcntl(fdd,F_SETFL,O_RDWR);//this doesn't work.
+     close(fdd);
+     if((fdd=open(file,O_RDWR|O_NONBLOCK,0)) == -1) {
+       privmsg(fd,from,"failed to tail that file because I tried to reopen with RDWR because it is a named pipe. fix perms?");
+       return;
+     }
+     if(!(opt & TAILO_ONCE)) {
+       privmsg(fd,from,"warning: attempting to tail a named pipe without using the TAILO_ONCE option!");
+     }
+     tailf[i].fp=fdopen(fdd,"r+");
+     break;
+   case S_IFREG://we're good
+     //need to unset nonblock
+     close(fdd);
+     if((fdd=open(file,O_RDONLY,0)) == -1) {
+       privmsg(fd,from,"failed to tail that file because I tried to reopen with RDONLY because it is NOT a named pipe.");
+       return;
+     }
+     tailf[i].fp=fdopen(fdd,"r");
+     break;
+   default:// SOCK, LNK, REG, BLK, DIR, CHR, FIFO
+     snprintf(tmp,sizeof(tmp)-1,"warning: file_tail was told to open a file that isn't either regular or a named pipe... type: %d", st.st_mode & S_IFMT);
+     privmsg(fd,"#cmd",tmp);
+     break;
+ }
+
+ if(opt & TAILO_ONCE) {//this needs to be automatic for named pipes?
   for(j=0;j<maxtails;j++) {//is this still a good loop?
    if(tailf[j].fp && tailf[j].file && tailf[j].inode) {
     if(tailf[j].inode == st.st_ino) {
@@ -525,13 +588,10 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
      //;just add another tail for it
   }}}
  }
- i=fdd;//hack hack hack. :P //I forgot I was using this. WHO CARES?!?
- if(i >= currentmaxtails) { currentmaxtails=i+1;}//not needed anymore?
- if(!(tailf[i].fp=fdopen(fdd,"r+"))) {
-//  snprintf(tmp,sizeof(tmp),"file_tail: failed to fdopen(%s)\n",file);
-//  privmsg(fd,from,tmp);
+ if(!(tailf[i].fp)) {//we only need r+ if we're using a named pipe
+  snprintf(tmp,sizeof(tmp),"file_tail: failed to fdopen(%s)\n",file);
+  privmsg(fd,from,tmp);
  } else {
-  fcntl(fdd,F_SETFL,O_RDWR);
   if(!(opt & TAILO_BEGIN)) {
    eofp(tailf[i].fp);
   }
@@ -578,17 +638,112 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
  }
 }
 
+void c_dlopen(int fd,char *from,char *line,...) {
+  int flags;
+  char tmp[512];
+  if(!line) {
+    privmsg(fd,from,"usage: !dlopen library [flags. defaults to RTLD_NOW]");
+    return;
+  }
+  char *sflags=strchr(line,' ');
+  if(sflags == 0) flags=RTLD_NOW;
+  else {
+    *sflags=0;
+    flags=atoi(sflags+1);
+  }
+  snprintf(tmp,sizeof(tmp)-1,"handle: %p",dlopen(line,flags));
+  privmsg(fd,from,tmp);
+}
+
+void c_dlclose(int fd,char *from,char *line,...) {
+  void *handle=(void *)atoi(line);
+  dlclose(handle);
+}
+
+void c_dlsym(int fd,char *from,char *line,...) {
+  char *symbol;
+  char tmp[512];
+  void *handle;
+  if(!line) {
+    privmsg(fd,from,"usage: !dlsym 0xhandle smybol_name");
+    return;
+  }
+  if((symbol=strchr(line,' ')) == 0) {
+    privmsg(fd,from,"dlsym needs at least two arguments. a handle from a previous dlopen, and a symbol you want the address of.");
+    return;
+  }
+  *symbol=0;
+  symbol++;
+  handle=(void *)atoi(line);
+  snprintf(tmp,sizeof(tmp)-1,"address of %s in %p: %p",symbol,handle,dlsym(handle,symbol));
+  privmsg(fd,from,tmp);
+}
+
+void c_leettail(int fd,char *from,char *file,struct user *user,...) {
+ int a;
+ int b;
+ int c;
+ int d;
+ int n;
+ if(!file) {
+  privmsg(fd,from,"!leettail NNfilename [format]");
+  privmsg(fd,from,"!leettail NNNfilename [format]");
+  privmsg(fd,from,"!leettail NN#channel:filename [format]");
+  privmsg(fd,from,"!leettail NNN#channel:filename [format]");
+  return;
+ }
+ if(file[0]) {
+ if(file[1]) {
+ if(file[2]) {
+  //
+ }else {
+  privmsg(fd,from,"usage1: !leettail NN filename");
+  privmsg(fd,from,"usage2: !leettail NNN filename");
+  return;
+ }}}
+ a=file[0]-'0';
+ b=file[1]-'0';
+ c=file[2]-'0';
+ if(c >= 0 && c <= 9) {
+  d=(a*100)+(b*10)+(c);
+  n=3;
+ } else {
+  d=(a*10)+(b);
+  n=2;
+ }
+ char *args;
+ if(file[0]==' ') file++;
+ if((args=strchr(file,' '))) {
+  *args=0;
+  args++;
+ }
+ file_tail(fd,from,file+n,args,d,user);
+}
+
+void prestartup_stuff(int fd) {
+ int fdd;
+ if((fdd=open("./scripts/prestartup",O_RDONLY))) {
+  close(fdd);
+  c_leettail(fd,"#cmd","22./scripts/prestartup",myuser);
+ }
+}
+
 void c_addserver(int fd,char *from,char *line,...) {
   int fdd;
+  if(!line) {
+    privmsg(fd,from,"wat");
+    return;
+  }
   char *port=strchr(line,' ');
   if(!port) port="6667";
   else {*port=0;port++;}
-  fprintf(stderr,"attempting to connect to %s:%s\n",line,port);
+  fprintf(stderr,"attempting to connect to '%s' on port '%s'\n",line,port);
   fdd=serverConnect(line,port);
-  fprintf(stderr,"connected! fd:%d\n",fdd);
   if(fdd == -1) {
-    return;//failed
+    fprintf(stderr,"failed to connect. fuck.\n");
+    return;
   }
+  fprintf(stderr,"connected! fd:%d\n",fdd);
   prestartup_stuff(fdd);
   add_fd(fdd,irc_handler);
 }
@@ -634,47 +789,6 @@ void c_mem(int fd,char *from,char *line,...) {
   privmsg(fd,from,tmp);
  }
  return;
-}
-
-void c_leettail(int fd,char *from,char *file,struct user *user,...) {
- int a;
- int b;
- int c;
- int d;
- int n;
- if(!file) {
-  privmsg(fd,from,"!leettail NNfilename [format]");
-  privmsg(fd,from,"!leettail NNNfilename [format]");
-  privmsg(fd,from,"!leettail NN#channel:filename [format]");
-  privmsg(fd,from,"!leettail NNN#channel:filename [format]");
-  return;
- }
- if(file[0]) {
- if(file[1]) {
- if(file[2]) {
-  //
- }else {
-  privmsg(fd,from,"usage1: !leettail NN filename");
-  privmsg(fd,from,"usage2: !leettail NNN filename");
-  return;
- }}}
- a=file[0]-'0';
- b=file[1]-'0';
- c=file[2]-'0';
- if(c >= 0 && c <= 9) {
-  d=(a*100)+(b*10)+(c);
-  n=3;
- } else {
-  d=(a*10)+(b);
-  n=2;
- }
- char *args;
- if(file[0]==' ') file++;
- if((args=strchr(file,' '))) {
-  *args=0;
-  args++;
- }
- file_tail(fd,from,file+n,args,d,user);
 }
 
 //crashes on: !changetail filename
@@ -729,14 +843,6 @@ void c_changetail(int fd,char *from,char *line,struct user *user,...) {
  }
  snprintf(tmp,sizeof(tmp)-1,"changetail: tail (%s) not found",line);
  privmsg(fd,from,tmp);
-}
-
-void prestartup_stuff(int fd) {
- int fdd;
- if((fdd=open("./scripts/prestartup",O_RDONLY))) {
-  close(fdd);
-  c_leettail(fd,"#cmd","22./scripts/prestartup",myuser);
- }
 }
 
 void debug_time(int fd,char *from,char *msg) {
@@ -812,6 +918,24 @@ void c_amnesia(int fd,char *from,...) {//forget aliases
  ht_freevalues(&alias);
  ht_destroy(&alias);
  inittable(&alias,TSIZE);
+}
+
+void c_rmalias_h(int fd,char *from,char *line,...) {
+ if(!ht_getnode(&alias,line)) {
+   privmsg(fd,from,"alias does not exist.");
+   return;
+ }
+ privmsg(fd,from,"alias deleted");
+ ht_delete(&alias,line);//deletes it out of the linked list.
+}
+
+void c_rmbuiltin_h(int fd,char *from,char *line,...) {
+ if(!ht_getnode(&builtin,line)) {
+   privmsg(fd,from,"builtin does not exist.");
+   return;
+ }
+ privmsg(fd,from,"builtin deleted");
+ ht_delete(&builtin,line);//deletes it out of the linked list.
 }
 
 void c_lobotomy(int fd,char *from,...) {//forget builtins
@@ -986,7 +1110,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
  int fdd;
  char tmp[512];
 // char derp[2];
- FILE *fp;
+// FILE *fp;
 // derp[0]=(char)nl;
 // derp[1]=0;
  if(line == 0) return mywrite(fd,"QUIT :line == 0 in append_file\r\n"),-1;
@@ -1001,7 +1125,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   privmsg(fd,"#cmd",tmp);
  }
  mywrite(fdd,line);
- mywrite(fdd,&nl);//kek
+ mywrite(fdd,(char *)&nl);//HACK. might want to fix this. opposite-endian will break.
 // dprintf(fdd,"%s\n",line);
 // fcntl(fdd,F_SETFL,O_WRONLY|O_APPEND|O_CREAT);
  close(fdd);
@@ -1052,26 +1176,27 @@ void c_leetappend(int fd,char *from,char *msg,...) {
 
 void c_tails(int fd,char *from,...) {
  int i;
- int l;
+ //int l;
  int at_least_one=0;
- char *tmp,*x;
+ char tmp[512];
+ char *x;
  char derp[512];
  snprintf(derp,sizeof(derp),"currentmaxtails: %d",currentmaxtails);
  privmsg(fd,from,derp);
  for(i=0;i<currentmaxtails;i++) {
   if(tailf[i].fp) {
    at_least_one=1;
-   l=(strlen(tailf[i].file) + strlen(tailf[i].to) + 50);//??? hack. fix it.
-   tmp=malloc(l);
-   if(!tmp) {
-    mywrite(fd,"QUIT :malloc error 8\r\n");
-    return;
-   }
+//   l=(strlen(tailf[i].file) + strlen(tailf[i].to) + 50);//??? hack. fix it.
+//   tmp=malloc(l);
+   //if(!tmp) {
+   // mywrite(fd,"QUIT :malloc error 8\r\n");
+   // return;
+   //}
    x=tailmode_to_txt(tailf[i].opt);
-   snprintf(tmp,l,"%d->%d %s [i:%d] @ %ld (%d) --[%s(%03u)]--> %s",fileno(tailf[i].fp),tailf[i].srcfd,tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to);
+   snprintf(tmp,sizeof(tmp)-1,"%d->%d %s [i:%d] @ %ld (%d) --[%s(%03u)]--> %s format: %s",fileno(tailf[i].fp),tailf[i].srcfd,tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to,tailf[i].args);
    free(x);
    privmsg(fd,from,tmp);
-   free(tmp);
+   //free(tmp);
   }
  }
  if(!at_least_one) {
@@ -1192,11 +1317,32 @@ void c_resetout(int fd,char *from,...) {
  privmsg(fd,from,"output reset");
 }
 
-void c_raw(int fd,char *from,char *msg,...) {
+void c_raw(int fd,char *from,char *msg,struct user *user) {
+ char tmp[512];
  char *tmp2;
  if(!msg) {
   privmsg(fd,from,"usage: !raw stuff-to-send-to-server");
   return;
+ }
+ if(!strncasecmp(msg,"KICK",4)) {
+  if(!strcmp(user->nick,myuser->nick)) {//if segfault is doing the kicking
+
+  } else {
+    snprintf(tmp,sizeof(tmp)-1,"KICK %s %s\r\nNICK dodged\r\n",from,user->nick);
+    mywrite(fd,tmp);
+    message_handler(fd,from,user,"lambda !raw nick %$segnick=%r",0);
+    return;
+  }
+ }
+ if(!strncasecmp(msg,"KILL",4)) {
+  if(!strcmp(user->nick,myuser->nick)) {//this is if SegFault is doing the killing.
+
+  } else {
+   snprintf(tmp,sizeof(tmp)-1,"KILL %s :fuck you I won't do what you tell me.\r\nNICK dodged\r\n",user->nick);
+   mywrite(fd,tmp);
+   message_handler(fd,from,user,"lambda !raw nick %$segnick=%r",0);
+   return;
+  }
  }
  tmp2=malloc(strlen(msg)+4);
  snprintf(tmp2,strlen(msg)+3,"%s\r\n",msg);
@@ -1232,7 +1378,8 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  char to_me;
  int len;
 // int sz;
- printf("message_handler: entry: message: '%s' redones: %d\n",msg,redones);
+ if(*msg == ' ' || *msg == 0) return 1;//
+ printf("message_handler: fd: %d redones: %d msg: '%s'\n",fd,redones,msg);
  if(redones && message_handler_trace) {
   snprintf(tmp,sizeof(tmp)-1,"trace: n: %s u: %s h: %s message '%s' redones: '%d'",user->nick,user->user,user->host,msg,redones);
   privmsg(fd,from,tmp);
@@ -1455,6 +1602,7 @@ void sigpipe_handler(int sig) {
 }
 
 int main(int argc,char *argv[]) {
+ format_helptext[0]=0;
  idc.shitlen=0;
  int i;
  for(i=0;i<100;i++) {//fuckme
@@ -1472,6 +1620,7 @@ int main(int argc,char *argv[]) {
 #define CMDCHR "!"
 #define BUILDIN(a,b) ht_setkey(&builtin,CMDCHR a,(void *)((union hack){(void (*)(int,...))b}.data))
  BUILDIN("builtin",c_builtin);
+ BUILDIN("rmbuiltin",c_rmbuiltin_h);
  BUILDIN("builtins",c_builtins);
  BUILDIN("raw",c_raw);
  BUILDIN("leetsetout",c_leetsetout);
@@ -1492,10 +1641,14 @@ int main(int argc,char *argv[]) {
  BUILDIN("id",c_id);
  BUILDIN("kill",c_kill);
  BUILDIN("alias",c_alias_h);
+ BUILDIN("rmalias",c_rmalias_h);
  BUILDIN("aliases",c_aliases_h);
  BUILDIN("lobotomy",c_lobotomy);
  BUILDIN("amnesia",c_amnesia);
-// BUILDIN("addserver",c_addserver);
+ BUILDIN("dlopen",c_dlopen);
+ BUILDIN("dlsym",c_dlsym);
+ BUILDIN("dlclose",c_dlclose);
+ BUILDIN("addserver",c_addserver);
 // BUILDIN("peek",c_mem);
 // BUILDIN("poke",c_mem);
  mode_magic=1;
@@ -1544,15 +1697,15 @@ int main(int argc,char *argv[]) {
                   getenv("segport")?getenv("segport"):PORT);
 //               myuser->nick,
 //               "segfault segfault segfault :segfault");
- fds[1]=serverConnect("127.0.0.1","6667");
- fds[2]=-1;
  printf("cd %s\n",pwd->pw_dir);
  chdir(getenv("seghome")?getenv("seghome"):pwd->pw_dir);
  getcwd(seghome,SEGHOMELEN);
+// fds[1]=serverConnect("127.0.0.1","6665");//bitlbee. fuck this for now.
+ fds[1]=-1;
  if(fds[0] == -1) return fprintf(stderr,"fds[0] == -1\n"),1;
- if(fds[1] == -1) return fprintf(stderr,"fds[1] == -1\n"),2;
+ //if(fds[1] == -1) return fprintf(stderr,"fds[1] == -1\n"),1;
  prestartup_stuff(fds[0]);
- prestartup_stuff(fds[1]);
+ //prestartup_stuff(fds[1]);
  printf("server fd: %d\n",fds[0]);
  return runem(fds,line_handler,0);
 }
