@@ -17,6 +17,7 @@
 #include <syslog.h>
 #include <grp.h> //setgroups
 #include <dlfcn.h>
+#include <setjmp.h>
 
 //epoch's libraries.
 #include <idc.h>
@@ -106,6 +107,7 @@ struct tail {
  unsigned short opt;
  unsigned int inode;
  int lines;
+ struct shit *me;
 } *tailf;
 
 char *shitlist[] = { 0 };
@@ -387,13 +389,18 @@ void eofp(FILE *fp) {
  clearerr(fp);
 }
 
-void tail_line_handler(int fd,char *line,int tailfd);
+void tail_line_handler(int fd,char *line,int tailfd,struct shit *me);
 
 void tail_handler(struct shit *me,char *line) {//how how call this with line of NULL to signal EOF
 //  fprintf(stderr,"tail_handler: fd %d->%d got line: %s\n",me->fd,tailf[me->fd].srcfd,line);
   if(line) {
 //    fprintf(stderr,"about to tail_line_handler");
-    tail_line_handler(tailf[me->fd].srcfd,line,me->fd);//HACK. SHOULD NOT HAVE 3 HERE. //what /should/ it have?
+    if(strlen(line)) {
+      tail_line_handler(tailf[me->fd].srcfd,line,me->fd,me);//HACK. SHOULD NOT HAVE 3 HERE. //what /should/ it have?
+    } //else {
+      //privmsg(tailf[me->fd].srcfd,"epoch","hack");
+      //how about we mark this tail as EOF
+    //}
 //    fprintf(stderr,"back from tail_line_handler");
   }
   else tailf[me->fd].fp=0;
@@ -401,7 +408,7 @@ void tail_handler(struct shit *me,char *line) {//how how call this with line of 
 
 void c_raw(int fd,char *from,char *msg,struct user *user);//don't want to shuffle functions around, so just putting this here.
 
-void tail_line_handler(int fd,char *line,int tailfd) {//the fd passed to this needs to be the server fd
+void tail_line_handler(int fd,char *line,int tailfd,struct shit *me) {//the fd passed to this needs to be the server fd
   char *tmp=strdup(line);
   char *tmp2;
 //  char *tmp3;
@@ -415,7 +422,7 @@ void tail_line_handler(int fd,char *line,int tailfd) {//the fd passed to this ne
   //if(i == currentmaxtails) return;//failed to find this tail.
   i=tailfd;//see hack about "durr I forgot I did this" in file_tail
   //tail_line_handler cn be used in both tail_handler and extra_handler now.
-     //tailf[i].lines++;
+     tailf[i].lines++;
      if(tailf[i].opt & TAILO_EVAL) {//eval
       if(tailf[i].opt & TAILO_FORMAT) {
        tmp2=format_magic(fd,tailf[i].to,tailf[i].user,tmp,tailf[i].args);//the line read is the format string.
@@ -458,10 +465,11 @@ void tail_line_handler(int fd,char *line,int tailfd) {//the fd passed to this ne
        privmsg(fd,tailf[i].to,tmp);
       }
      }
-     //if(tailf[i].lines >= line_limit && (tailf[i].opt & TAILO_SPAM)) {
-     // tailf[i].lines=-1; //lock it.
-     // privmsg(fd,tailf[i].to,"--more--");
-     //}
+     /*if(tailf[i].lines >= line_limit && (tailf[i].opt & TAILO_SPAM)) {
+      tailf[i].lines=-1;//lock it.
+      me->read_lines_for_us=0;//we do NOT want libidc to read lines for us while we're locked.
+      privmsg(fd,tailf[i].to,"--more--");
+     }*/
   free(tmp);
 }
 
@@ -633,6 +641,7 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   tailf[i].lines=0;
   tailf[i].srcfd=fd;//this is like tailf[i].to //maybe combine somehow?
   i=add_fd(fdd,tail_handler);//returns the index.
+  tailf[i].me=&(idc.fds[i]);
   idc.fds[i].keep_open=!(opt & TAILO_CLOSE);
 //  idc.fds[i].extra_info=tailf[fdd];//we need this somehow.
  }
@@ -656,8 +665,9 @@ void c_dlopen(int fd,char *from,char *line,...) {
 }
 
 void c_dlclose(int fd,char *from,char *line,...) {
-  void *handle=(void *)atoi(line);
-  dlclose(handle);
+  void *handle=(void *)strtoul(line?line:"",0,0);
+  if(handle) dlclose(handle);
+  else privmsg(fd,from,"usage: !dlclose handle");
 }
 
 void c_dlsym(int fd,char *from,char *line,...) {
@@ -674,7 +684,7 @@ void c_dlsym(int fd,char *from,char *line,...) {
   }
   *symbol=0;
   symbol++;
-  handle=(void *)atoi(line);
+  handle=(void *)strtoul(line,0,0);
   snprintf(tmp,sizeof(tmp)-1,"address of %s in %p: %p",symbol,handle,dlsym(handle,symbol));
   privmsg(fd,from,tmp);
 }
@@ -731,7 +741,7 @@ void prestartup_stuff(int fd) {
 void c_addserver(int fd,char *from,char *line,...) {
   int fdd;
   if(!line) {
-    privmsg(fd,from,"wat");
+    privmsg(fd,from,"usage: !addserver host [default-port-6667]");
     return;
   }
   char *port=strchr(line,' ');
@@ -763,6 +773,12 @@ void c_putenv(int fd,char *from,char *line,...) {
  putenv(strdup(line));//OH MY GOD. WHAT THE FUCK? MEMORY LEAK AND NO CHECKS AT ALL!?!?
 }
 
+jmp_buf ex_buf__;
+
+void segvhandler(int sig,siginfo_t *siginfo,void *context) {
+  longjmp(ex_buf__,1);
+}
+
 void c_mem(int fd,char *from,char *line,...) {
  char tmp[512];
 // char *function=line;
@@ -777,17 +793,33 @@ void c_mem(int fd,char *from,char *line,...) {
   privmsg(fd,from,"sscanf didn't get an address.");
   return;
  }
- if((v=strchr(line,' '))) {
-  *v=0;
-  v++;
-  sscanf(v,"%02hhx",&value);
-  *((unsigned char *)address)=value;
-  snprintf(tmp,sizeof(tmp)-1,"address %08x now containes the value %02x",address,value);
-  privmsg(fd,from,tmp);
+// privmsg(fd,from,"setting segfault handler so we don't crash if you fat fingered an address.");
+ struct sigaction act;
+ memset(&act,0,sizeof(struct sigaction));
+ sigemptyset(&act.sa_mask);
+ act.sa_sigaction = &segvhandler;
+ act.sa_flags = SA_SIGINFO | SA_NODEFER;
+ sigaction(SIGSEGV,&act,0);
+ if(!setjmp(ex_buf__)) {
+  if((v=strchr(line,' '))) {
+   *v=0;
+   v++;
+   sscanf(v,"%02hhx",&value);
+   *((unsigned char *)address)=value;
+   snprintf(tmp,sizeof(tmp)-1,"address %08x now containes the value %02x (%c)",address,value,isprint(value)?value:'?');
+   privmsg(fd,from,tmp);
+  } else {
+   value=*((unsigned char *)address);
+   snprintf(tmp,sizeof(tmp)-1,"address %08x contains %02x (%c)",address,value,isprint(value)?value:'?');
+   privmsg(fd,from,tmp);
+  }
  } else {
-  snprintf(tmp,sizeof(tmp)-1,"address %08x contains %02x",address,*((unsigned char *)address));
-  privmsg(fd,from,tmp);
+   privmsg(fd,from,"Segmentation Fault");
  }
+// privmsg(fd,from,"setting segfault handler back to default.");
+ act.sa_handler = SIG_DFL;
+ sigaction(SIGSEGV,&act,0);
+ //signal(SIGSEGV,SIG_DFL);
  return;
 }
 
@@ -1099,6 +1131,8 @@ void c_tailunlock(int fd,char *from,char *file,...) {
   if(tailf[i].fp) {
    if(!strcmp(file,tailf[i].file)) {
     tailf[i].lines=0;
+    tailf[i].me->read_lines_for_us=1;
+    tailf[i].me->eof=0;
     return;
    }
   }
@@ -1124,8 +1158,8 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
   snprintf(tmp,sizeof(tmp)-1,"append_file opened file '%s' with fd: %d / %d / %d\n",file,fdd,currentmaxtails,maxtails);
   privmsg(fd,"#cmd",tmp);
  }
- mywrite(fdd,line);
- mywrite(fdd,(char *)&nl);//HACK. might want to fix this. opposite-endian will break.
+ snprintf(tmp,sizeof(tmp)-1,"%s%c",line,nl);
+ mywrite(fdd,tmp);
 // dprintf(fdd,"%s\n",line);
 // fcntl(fdd,F_SETFL,O_WRONLY|O_APPEND|O_CREAT);
  close(fdd);
@@ -1149,6 +1183,7 @@ char append_file(int fd,char *from,char *file,char *line,unsigned short nl) {
 
 void c_leetappend(int fd,char *from,char *msg,...) {
  unsigned short nl;
+ char tmp[256];
  if(!msg) {
   privmsg(fd,from,"usage: !leetappend file EOL-char-dec line-to-put");
   return;
@@ -1171,6 +1206,10 @@ void c_leetappend(int fd,char *from,char *msg,...) {
   return;
  }
  nl=((snl[0]-'0')*10)+((snl[1]-'0'));
+ if(debug) {
+   snprintf(tmp,sizeof(tmp)-1,"file: %s eol: %d line: %s\n",file,nl,line);
+   privmsg(fd,from,tmp);
+ }
  append_file(fd,from,file,line,nl);
 }
 
@@ -1378,7 +1417,7 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  char to_me;
  int len;
 // int sz;
- if(*msg == ' ' || *msg == 0) return 1;//
+ if(*msg == 0) return 1;//
  printf("message_handler: fd: %d redones: %d msg: '%s'\n",fd,redones,msg);
  if(redones && message_handler_trace) {
   snprintf(tmp,sizeof(tmp)-1,"trace: n: %s u: %s h: %s message '%s' redones: '%d'",user->nick,user->user,user->host,msg,redones);
@@ -1471,6 +1510,7 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  }
  if(redones >= RECURSE_LIMIT) {
   privmsg(fd,from,"I don't know if I'll ever get out of this alias hole you're telling me to dig. Fuck this.");
+  privmsg(fd,from,command);
  }
  free(oldcommand);
  return 0;//I guess we didn't find anyway. let it fall back to generic handlers.
@@ -1528,7 +1568,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    }
   }
  }
- if(a[0] && user->nick && a[1]) {
+ if(a[0] && user->nick && a[1]) {//
   strcpy(tmp,";");
   strcat(tmp,a[0]);
   if((ht_getnode(&alias,tmp)) != NULL) {
@@ -1649,8 +1689,8 @@ int main(int argc,char *argv[]) {
  BUILDIN("dlsym",c_dlsym);
  BUILDIN("dlclose",c_dlclose);
  BUILDIN("addserver",c_addserver);
-// BUILDIN("peek",c_mem);
-// BUILDIN("poke",c_mem);
+ BUILDIN("peek",c_mem);
+ BUILDIN("poke",c_mem);
  mode_magic=1;
  snooty=0;
  message_handler_trace=0;
