@@ -890,7 +890,7 @@ void c_builtin(int fd,char *from,char *line,...) {
  char tmp[512];
  char *function=line;
  char *addr;
- unsigned long int address; // lol. will fail on x64
+ unsigned long int address;
  if(!line) {
   privmsg(fd,from,"usage: !builtin command [address]");
   return;
