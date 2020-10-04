@@ -1,11 +1,15 @@
-LDFLAGS=-L/usr/local/lib -L/home/pi/.local/lib -lirc -lhashtable -lgcc_s -lidc
-CFLAGS=-pedantic -Wall -ggdb -I/usr/local/include -I/home/pi/.local/include
+PREFIX:=/usr/local
+LDFLAGS=-L/usr/local/lib -L$(PREFIX)/lib -lirc -lhashtable -lgcc_s -lidc -ldl
+CFLAGS=-pedantic -Wall -ggdb -I/usr/local/include -I$(PREFIX)/include
 
-all: segfault
+all: segfault libhack.so
+
+libhack.so: libhack.o
+	ld -shared -o libhack.so libhack.o
 
 again: clean all
 
-segfault: segfault.c
+segfault: segfault.c access.h
 
 clean:
 	rm -f segfault
