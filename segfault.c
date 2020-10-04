@@ -1,5 +1,6 @@
 #define _GNU_SOURCE //to get string.h to have strcasestr
 #include <string.h>
+#include <ctype.h> //isprint()
 #include <stdio.h>
 #include <stdarg.h>
 #include <signal.h>
@@ -784,12 +785,12 @@ void c_mem(int fd,char *from,char *line,...) {
 // char *function=line;
  unsigned char value;
  char *v;
- unsigned int address; // lol. will fail on x64
+ unsigned long int address;
  if(!line) {
   privmsg(fd,from,"usage: !mem address [value]");
   return;
  }
- if(!sscanf(line,"%08x",&address)) {
+ if(!sscanf(line,"%08lx",&address)) {
   privmsg(fd,from,"sscanf didn't get an address.");
   return;
  }
@@ -806,11 +807,11 @@ void c_mem(int fd,char *from,char *line,...) {
    v++;
    sscanf(v,"%02hhx",&value);
    *((unsigned char *)address)=value;
-   snprintf(tmp,sizeof(tmp)-1,"address %08x now containes the value %02x (%c)",address,value,isprint(value)?value:'?');
+   snprintf(tmp,sizeof(tmp)-1,"address %08lx now containes the value %02x (%c)",address,value,isprint(value)?value:'?');
    privmsg(fd,from,tmp);
   } else {
    value=*((unsigned char *)address);
-   snprintf(tmp,sizeof(tmp)-1,"address %08x contains %02x (%c)",address,value,isprint(value)?value:'?');
+   snprintf(tmp,sizeof(tmp)-1,"address %08lx contains %02x (%c)",address,value,isprint(value)?value:'?');
    privmsg(fd,from,tmp);
   }
  } else {
@@ -889,7 +890,7 @@ void c_builtin(int fd,char *from,char *line,...) {
  char tmp[512];
  char *function=line;
  char *addr;
- unsigned int address; // lol. will fail on x64
+ unsigned long int address; // lol. will fail on x64
  if(!line) {
   privmsg(fd,from,"usage: !builtin command [address]");
   return;
@@ -897,16 +898,16 @@ void c_builtin(int fd,char *from,char *line,...) {
  if((addr=strchr(line,' '))) {
   *addr=0;
   addr++;
-  if(!sscanf(addr,"%08x",&address)) {
+  if(!sscanf(addr,"%08lx",&address)) {
    privmsg(fd,from,"sscanf didn't get an address.");
    return;
   }
-  snprintf(tmp,sizeof(tmp)-1,"address read for %s: %08x",function,address);
+  snprintf(tmp,sizeof(tmp)-1,"address read for %s: %08lx",function,address);
   privmsg(fd,from,tmp);
   ht_setkey(&builtin,function,(void *)address);
  } else {
-  address=(unsigned int)ht_getvalue(&builtin,function);
-  snprintf(tmp,sizeof(tmp)-1,"builtin %s's address: %08x",function,address);
+  address=(unsigned long int)ht_getvalue(&builtin,function);
+  snprintf(tmp,sizeof(tmp)-1,"builtin %s's address: %08lx",function,address);
   privmsg(fd,from,tmp);
  }
  return;
