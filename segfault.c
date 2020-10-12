@@ -70,7 +70,7 @@ char *strndup(char *s,int l) {
 //dunno if I need this yet.
 extern struct idc_global idc;//???
 
-struct user *myuser;
+struct user *myuser[256];
 char pid[6];
 char time_str[16];
 char mode_magic;
@@ -283,7 +283,7 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  magic['n']=(user->nick?user->nick:"user->nick");
  magic['u']=(user->user?user->user:"user->user");
  magic['h']=(user->host?user->host:"user->host");
- magic['m']=(myuser->nick?myuser->nick:"myuser->nick");
+ magic['m']=(myuser[fd]->nick?myuser[fd]->nick:"myuser->nick");
  magic['~']=seghome;
  magic['f']=(from?from:"from");
  magic['F']=fd_str;
@@ -394,7 +394,8 @@ void tail_line_handler(int fd,char *line,int tailfd,struct shit *me);
 
 void tail_handler(struct shit *me,char *line) {//how how call this with line of NULL to signal EOF
 //  fprintf(stderr,"tail_handler: fd %d->%d got line: %s\n",me->fd,tailf[me->fd].srcfd,line);
-  if(line) {
+  if(me) {
+   if(line) {
 //    fprintf(stderr,"about to tail_line_handler");
     if(strlen(line)) {
       tail_line_handler(tailf[me->fd].srcfd,line,me->fd,me);//HACK. SHOULD NOT HAVE 3 HERE. //what /should/ it have?
@@ -403,8 +404,11 @@ void tail_handler(struct shit *me,char *line) {//how how call this with line of 
       //how about we mark this tail as EOF
     //}
 //    fprintf(stderr,"back from tail_line_handler");
+   }
+   else {
+    tailf[me->fd].fp=0;
+   }
   }
-  else tailf[me->fd].fp=0;
 }
 
 void c_raw(int fd,char *from,char *msg,struct user *user);//don't want to shuffle functions around, so just putting this here.
@@ -735,7 +739,7 @@ void prestartup_stuff(int fd) {
  int fdd;
  if((fdd=open("./scripts/prestartup",O_RDONLY))) {
   close(fdd);
-  c_leettail(fd,"#cmd","22./scripts/prestartup",myuser);
+  c_leettail(fd,"#cmd","22./scripts/prestartup",myuser[fd]);
  }
 }
 
@@ -750,6 +754,12 @@ void c_addserver(int fd,char *from,char *line,...) {
   else {*port=0;port++;}
   fprintf(stderr,"attempting to connect to '%s' on port '%s'\n",line,port);
   fdd=serverConnect(line,port);
+
+  myuser[fdd]=malloc(sizeof(struct user));
+  myuser[fdd]->nick=strdup(NICK);
+  myuser[fdd]->host="I_dunno";//???
+  myuser[fdd]->user=strdup(NICK);//hax. fix proper later
+
   if(fdd == -1) {
     fprintf(stderr,"failed to connect. fuck.\n");
     return;
@@ -1132,8 +1142,10 @@ void c_tailunlock(int fd,char *from,char *file,...) {
   if(tailf[i].fp) {
    if(!strcmp(file,tailf[i].file)) {
     tailf[i].lines=0;
-    tailf[i].me->read_lines_for_us=1;
-    tailf[i].me->eof=0;
+    if(tailf[i].me) {
+     tailf[i].me->read_lines_for_us=1;
+     tailf[i].me->eof=0;
+    }
     return;
    }
   }
@@ -1365,7 +1377,7 @@ void c_raw(int fd,char *from,char *msg,struct user *user) {
   return;
  }
  if(!strncasecmp(msg,"KICK",4)) {
-  if(!strcmp(user->nick,myuser->nick)) {//if segfault is doing the kicking
+  if(!strcmp(user->nick,myuser[fd]->nick)) {//if segfault is doing the kicking
 
   } else {
     snprintf(tmp,sizeof(tmp)-1,"KICK %s %s\r\nNICK dodged\r\n",from,user->nick);
@@ -1375,7 +1387,7 @@ void c_raw(int fd,char *from,char *msg,struct user *user) {
   }
  }
  if(!strncasecmp(msg,"KILL",4)) {
-  if(!strcmp(user->nick,myuser->nick)) {//this is if SegFault is doing the killing.
+  if(!strcmp(user->nick,myuser[fd]->nick)) {//this is if SegFault is doing the killing.
 
   } else {
    snprintf(tmp,sizeof(tmp)-1,"KILL %s :fuck you I won't do what you tell me.\r\nNICK dodged\r\n",user->nick);
@@ -1400,10 +1412,10 @@ void c_nick(int fd,char *from,char *msg,...) {
   privmsg(fd,from,"usage: !nick new-nick-to-try");
   return;
  }
- free(myuser->nick);
+ free(myuser[fd]->nick);
  if(!msg) exit(78);
- myuser->nick=strdup(msg);
- irc_nick(fd,myuser->nick);
+ myuser[fd]->nick=strdup(msg);
+ irc_nick(fd,myuser[fd]->nick);
 }
 
 int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
@@ -1437,10 +1449,10 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
  }
 
  //there's a bug here when directing a string to a nick but the * isn't part of the nick.
- len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(myuser->nick);
+ len=strchr(msg,'*')?strchr(msg,'*')-msg:strlen(myuser[fd]->nick);
 
  to_me=0;
- if(!strncasecmp(msg,myuser->nick,len)) {
+ if(!strncasecmp(msg,myuser[fd]->nick,len)) {
   if(msg[len] == '*') len++;
   if(msg[len] == ',' || msg[len] == ':') {
    if(msg[len+1] == ' ') {
@@ -1461,7 +1473,7 @@ int message_handler(int fd,char *from,struct user *user,char *msg,int redones) {
   *command=';';
  }
  //access control goes here
- if(!isallowed(from,user,myuser,msg)) {
+ if(!isallowed(from,user,myuser[fd],msg)) {
    return 1;
  }
 //  command[1]=' ';
@@ -1548,7 +1560,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    //if(!user->user) { if(!(user->user=strdup("$UNDEF_USER"))) exit(__LINE__); freeuser=1;}
    //if(!user->host) { if(!(user->host=strdup("$UNDEF_HOST"))) exit(__LINE__); freehost=1;}
    strcat(tmp,line2);
-   message_handler(fd,"epoch",myuser,tmp,1);
+   message_handler(fd,"epoch",myuser[fd],tmp,1);
    //if(freenick) free(user->nick);
    //if(freeuser) free(user->user);
    //if(freehost) free(user->host);
@@ -1557,7 +1569,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
  free(line2);
  if(a[0] && a[1] && a[2]) {
   if(!strcmp(a[0],"PRIVMSG") || !strcmp(a[0],"NOTICE")) {
-   if(strcmp(user->nick,myuser->nick)) {
+   if(strcmp(user->nick,myuser[fd]->nick)) {
     if(message_handler(fd,*a[1]=='#'?a[1]:user->nick,user,a[2],0)) {
      free(user);//we handled this message. don't let it fall into more generic handlers.
      free(a);
@@ -1583,28 +1595,28 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    //privmsg(fd,"#cmd",a[0]);
   //}
   if(!strcmp(a[0],"JOIN")) {
-   if(isallowed("", user, myuser,"")) {
+   if(isallowed("", user, myuser[fd],"")) {
     irc_mode(fd,a[1],"+o",user->nick);
    } else {
     irc_mode(fd,a[1],"+v",user->nick);
    }
   }
-//  if(!strcmp(a[0],"KICK") && !strcmp(a[2],"epoch") && strcmp(user->nick,myuser->nick)) {
+//  if(!strcmp(a[0],"KICK") && !strcmp(a[2],"epoch") && strcmp(user->nick,myuser[fd]->nick)) {
 //   snprintf(tmp,sizeof(tmp)-1,"KILL %s :don't fuck with my bro.\r\n",user->nick);
 //   mywrite(fd,tmp);
 //  }
-  if(!strcmp(a[0],"KICK") && !strcmp(a[2],myuser->nick)) {
+  if(!strcmp(a[0],"KICK") && !strcmp(a[2],myuser[fd]->nick)) {
    snprintf(tmp,sizeof(tmp)-1,"JOIN %s\r\n",a[1]);
    mywrite(fd,tmp);
 //   snprintf(tmp,sizeof(tmp)-1,"KILL %s :don't fuck with me.\r\n",user->nick);
 //   mywrite(fd,tmp);
   }
-  if(!strcmp(user->nick,myuser->nick) && !strcmp(a[0],"PART") ) {
+  if(!strcmp(user->nick,myuser[fd]->nick) && !strcmp(a[0],"PART") ) {
    snprintf(tmp,sizeof(tmp)-1,"JOIN %s\r\n",a[1]);
    mywrite(fd,tmp);
   }
   if(!strcmp(a[0],"MODE") && mode_magic) {
-   if(strcmp(user->nick,myuser->nick)) {
+   if(strcmp(user->nick,myuser[fd]->nick)) {
     if(a[2]) {
      if(*a[2] == '-') {//auto-give modes back that are removed in front of segfault.
       *a[2]='+';
@@ -1616,7 +1628,7 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
      }
     }
    }
-   if(!strcmp(user->nick,myuser->nick)) {//if someone is making me set a mode and I see it.
+   if(!strcmp(user->nick,myuser[fd]->nick)) {//if someone is making me set a mode and I see it.
     if(a[2]) {
      if(*a[2] == '+' && a[2][1] == 'b') {//segfault doesn't ban.
       *a[2]='-';
@@ -1626,10 +1638,10 @@ void line_handler(int fd,char *line) {//this should be built into the libary?
    }
   }
   if(!strcmp(a[0],"NICK") && a[1]) {
-   if(!strcmp(user->nick,myuser->nick)) {
-    free(myuser->nick);
+   if(!strcmp(user->nick,myuser[fd]->nick)) {
+    free(myuser[fd]->nick);
     if(!a[1]) exit(79);
-    if(!(myuser->nick=strdup(a[1]))) exit(179);
+    if(!(myuser[fd]->nick=strdup(a[1]))) exit(179);
    }
   }
  }
@@ -1712,9 +1724,6 @@ int main(int argc,char *argv[]) {
   currentmaxtails=4;
   tailf=malloc(sizeof(struct tail) * (maxtails + 1));
  }
- myuser=malloc(sizeof(struct user));
- myuser->nick=strdup(argc>1?argv[1]:NICK);
- myuser->host="I_dunno";//???
  snprintf(pid,6,"%d",getpid());
  printf("starting segfault...\n");
  if(!getuid() || !geteuid()) {
@@ -1729,7 +1738,6 @@ int main(int argc,char *argv[]) {
   printf("going to run segfault as user %s\n",pwd->pw_name);
   if(!pwd) { printf("well, shit. I don't know who I am."); return 0; }
  }
- myuser->user=strdup(pwd->pw_name);
  for(c=0;c<maxtails;c++) tailf[c].fp=0;
  s=getenv("segserver"); s=s?s:SERVER;
  p=getenv("segport"); p=p?p:PORT;
@@ -1738,6 +1746,11 @@ int main(int argc,char *argv[]) {
                   getenv("segport")?getenv("segport"):PORT);
 //               myuser->nick,
 //               "segfault segfault segfault :segfault");
+ myuser[fds[0]]=malloc(sizeof(struct user));
+ myuser[fds[0]]->nick=strdup(argc>1?argv[1]:NICK);
+ myuser[fds[0]]->host="I_dunno";//???
+ myuser[fds[0]]->user=strdup(pwd->pw_name);
+
  printf("cd %s\n",pwd->pw_dir);
  chdir(getenv("seghome")?getenv("seghome"):pwd->pw_dir);
  getcwd(seghome,SEGHOMELEN);
