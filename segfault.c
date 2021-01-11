@@ -109,12 +109,40 @@ struct tail {
  unsigned int inode;
  int lines;
  struct shit *me;
+ time_t linetime;//last time a line was read
 } *tailf;
 
 char *shitlist[] = { 0 };
 
 int message_handler(int fd,char *from,struct user *user,char *msg,int redones);
 void c_leetuntail(int fd,char *from,char *line,...);
+
+/* segfault trapping */
+jmp_buf bed;
+
+void segvhandler(int sig,siginfo_t *siginfo,void *context) {
+  longjmp(bed,1);
+}
+
+void hold_onto_your_butts() {
+  struct sigaction act;
+  memset(&act,0,sizeof(struct sigaction));
+  sigemptyset(&act.sa_mask);
+  act.sa_sigaction = &segvhandler;
+  act.sa_flags = SA_SIGINFO | SA_NODEFER;
+  sigaction(SIGSEGV,&act,0);
+}
+
+void unclench() {
+  struct sigaction act;
+  memset(&act,0,sizeof(struct sigaction));
+  sigemptyset(&act.sa_mask);
+  act.sa_handler = SIG_DFL;
+  sigaction(SIGSEGV,&act,0);
+}
+
+#define we_pooped_the(a) setjmp(a)
+/* fun names, eh? */
 
 //this function isn't with the rest of them because... meh.
 char *tailmode_to_txt(int mode) {
@@ -293,6 +321,8 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  magic['A']="\x01";//for ctcp and action
  magic['B']="\x02";//for bold
  magic['C']="\x03";//for colors
+ //D 4, E 5, F 6, G 7, H 8, I 9, J A, K B, L C,
+ magic['M']="\x0d";//for exploits
  magic['0']=argN[0];
  magic['1']=argN[1];
  magic['2']=argN[2];
@@ -405,7 +435,8 @@ void tail_handler(struct shit *me,char *line) {//how how call this with line of 
     //}
 //    fprintf(stderr,"back from tail_line_handler");
    }
-   else {
+   else {//we need to close this too!
+    close(me->fd);
     tailf[me->fd].fp=0;
    }
   }
@@ -414,8 +445,10 @@ void tail_handler(struct shit *me,char *line) {//how how call this with line of 
 void c_raw(int fd,char *from,char *msg,struct user *user);//don't want to shuffle functions around, so just putting this here.
 
 void tail_line_handler(int fd,char *line,int tailfd,struct shit *me) {//the fd passed to this needs to be the server fd
+  time_t now=time(NULL);
   char *tmp=strdup(line);
   char *tmp2;
+  char tmp3[4096];//too much. who cares?
 //  char *tmp3;
   int i;
   //need a better way to find this....
@@ -470,11 +503,16 @@ void tail_line_handler(int fd,char *line,int tailfd,struct shit *me) {//the fd p
        privmsg(fd,tailf[i].to,tmp);
       }
      }
-     /*if(tailf[i].lines >= line_limit && (tailf[i].opt & TAILO_SPAM)) {
+     if (tailf[i].lines >= line_limit && (tailf[i].opt & TAILO_SPAM)) {
       tailf[i].lines=-1;//lock it.
       me->read_lines_for_us=0;//we do NOT want libidc to read lines for us while we're locked.
-      privmsg(fd,tailf[i].to,"--more--");
-     }*/
+      snprintf(tmp3,sizeof(tmp3)-1,"--more-- [%s]",tailf[i].file);
+      privmsg(fd,tailf[i].to,tmp3);
+     }
+  if(tailf[i].linetime != now) {
+    tailf[i].linetime=now;
+    tailf[i].lines=0;
+  }
   free(tmp);
 }
 
@@ -645,9 +683,9 @@ void file_tail(int fd,char *from,char *file,char *args,int opt,struct user *user
   }
   tailf[i].lines=0;
   tailf[i].srcfd=fd;//this is like tailf[i].to //maybe combine somehow?
-  i=add_fd(fdd,tail_handler);//returns the index.
-  tailf[i].me=&(idc.fds[i]);
-  idc.fds[i].keep_open=!(opt & TAILO_CLOSE);
+  j=add_fd(fdd,tail_handler);//returns the index.
+  tailf[i].me=&(idc.fds[j]);
+  idc.fds[j].keep_open=!(opt & TAILO_CLOSE);
 //  idc.fds[i].extra_info=tailf[fdd];//we need this somehow.
  }
 }
@@ -671,8 +709,16 @@ void c_dlopen(int fd,char *from,char *line,...) {
 
 void c_dlclose(int fd,char *from,char *line,...) {
   void *handle=(void *)strtoul(line?line:"",0,0);
-  if(handle) dlclose(handle);
+  if(handle) {
+    hold_onto_your_butts();
+    if(we_pooped_the(bed)) {
+      privmsg(fd,from,"Segmentation Fault");
+    } else {
+      dlclose(handle);
+    }
+  }
   else privmsg(fd,from,"usage: !dlclose handle");
+  unclench();
 }
 
 void c_dlsym(int fd,char *from,char *line,...) {
@@ -690,7 +736,12 @@ void c_dlsym(int fd,char *from,char *line,...) {
   *symbol=0;
   symbol++;
   handle=(void *)strtoul(line,0,0);
-  snprintf(tmp,sizeof(tmp)-1,"address of %s in %p: %p",symbol,handle,dlsym(handle,symbol));
+  hold_onto_your_butts();
+  if(we_pooped_the(bed)) {
+    snprintf(tmp,sizeof(tmp)-1,"Segmentation Fault");
+  } else {
+    snprintf(tmp,sizeof(tmp)-1,"address of %s in %p: %p",symbol,handle,dlsym(handle,symbol));
+  }
   privmsg(fd,from,tmp);
 }
 
@@ -784,15 +835,9 @@ void c_putenv(int fd,char *from,char *line,...) {
  putenv(strdup(line));//OH MY GOD. WHAT THE FUCK? MEMORY LEAK AND NO CHECKS AT ALL!?!?
 }
 
-jmp_buf ex_buf__;
-
-void segvhandler(int sig,siginfo_t *siginfo,void *context) {
-  longjmp(ex_buf__,1);
-}
 
 void c_mem(int fd,char *from,char *line,...) {
  char tmp[512];
-// char *function=line;
  unsigned char value;
  char *v;
  unsigned long int address;
@@ -804,14 +849,10 @@ void c_mem(int fd,char *from,char *line,...) {
   privmsg(fd,from,"sscanf didn't get an address.");
   return;
  }
-// privmsg(fd,from,"setting segfault handler so we don't crash if you fat fingered an address.");
- struct sigaction act;
- memset(&act,0,sizeof(struct sigaction));
- sigemptyset(&act.sa_mask);
- act.sa_sigaction = &segvhandler;
- act.sa_flags = SA_SIGINFO | SA_NODEFER;
- sigaction(SIGSEGV,&act,0);
- if(!setjmp(ex_buf__)) {
+ hold_onto_your_butts();
+ if(we_pooped_the(bed)) {
+   privmsg(fd,from,"Segmentation Fault");
+ } else {
   if((v=strchr(line,' '))) {
    *v=0;
    v++;
@@ -824,13 +865,8 @@ void c_mem(int fd,char *from,char *line,...) {
    snprintf(tmp,sizeof(tmp)-1,"address %08lx contains %02x (%c)",address,value,isprint(value)?value:'?');
    privmsg(fd,from,tmp);
   }
- } else {
-   privmsg(fd,from,"Segmentation Fault");
  }
-// privmsg(fd,from,"setting segfault handler back to default.");
- act.sa_handler = SIG_DFL;
- sigaction(SIGSEGV,&act,0);
- //signal(SIGSEGV,SIG_DFL);
+ unclench();
  return;
 }
 
@@ -1145,6 +1181,8 @@ void c_tailunlock(int fd,char *from,char *file,...) {
     if(tailf[i].me) {
      tailf[i].me->read_lines_for_us=1;
      tailf[i].me->eof=0;
+    } else {
+     privmsg(fd,from,"tailf[i].me is null. found a bug.");
     }
     return;
    }
@@ -1245,7 +1283,18 @@ void c_tails(int fd,char *from,...) {
    // return;
    //}
    x=tailmode_to_txt(tailf[i].opt);
-   snprintf(tmp,sizeof(tmp)-1,"%d->%d %s [i:%d] @ %ld (%d) --[%s(%03u)]--> %s format: %s",fileno(tailf[i].fp),tailf[i].srcfd,tailf[i].file,tailf[i].inode,ftell(tailf[i].fp),tailf[i].lines,x,tailf[i].opt,tailf[i].to,tailf[i].args);
+   snprintf(tmp,sizeof(tmp)-1,"%d->%d %s [i:%d] @ %ld (%d) --[%s(%03u)]--> %s format: %s",
+     fileno(tailf[i].fp),
+     tailf[i].srcfd,
+     tailf[i].file,
+     tailf[i].inode,
+     ftell(tailf[i].fp),
+     tailf[i].lines,
+     x,
+     tailf[i].opt,
+     tailf[i].to,
+     tailf[i].args
+   );
    free(x);
    privmsg(fd,from,tmp);
    //free(tmp);
