@@ -320,9 +320,13 @@ char *format_magic(int fd,char *from,struct user *user,char *orig_fmt,char *arg)
  magic['s']=(arg?arg:"arg");
  magic['A']="\x01";//for ctcp and action
  magic['B']="\x02";//for bold
- magic['C']="\x03";//for colors
+ magic['C']="\x03";//for colors or ctrl+C
+ magic['D']="\x04";//for ctrl+D
+ magic['V']="\x16";
+ magic['\\']="\x1d";//for ctrl+\ lol. multiline comment if I don't put something after the \.
  //D 4, E 5, F 6, G 7, H 8, I 9, J A, K B, L C,
  magic['M']="\x0d";//for exploits
+ magic['e']="\x1b";//for vim... or whatever
  magic['0']=argN[0];
  magic['1']=argN[1];
  magic['2']=argN[2];
@@ -1056,7 +1060,7 @@ void c_aliases_h(int fd,char *from,char *line,...) {
 void c_alias_h(int fd,char *from,char *line,...) {
  char tmps[512];
  if(!line) {
-  printf("usage: !alias command [other_command]");
+  privmsg(fd,from,"usage: !alias command [other_command]");
   return;
  }
  char *derp=strchr(line,' ');
@@ -1426,10 +1430,14 @@ void c_raw(int fd,char *from,char *msg,struct user *user) {
   return;
  }
  if(!strncasecmp(msg,"KICK",4)) {
-  if(!strcmp(user->nick,myuser[fd]->nick)) {//if segfault is doing the kicking
-
+  if((tmp2=strchr(msg+5,' '))) {
+   *tmp2='\0';
+  }
+  if(!strcmp(user->nick,myuser[fd]->nick) || !strcmp(user->nick,msg+5)) {//if segfault is doing the kicking, or someone is kicking themself.
+    if(tmp2) *tmp2=' ';
   } else {
-    snprintf(tmp,sizeof(tmp)-1,"KICK %s %s\r\nNICK dodged\r\n",from,user->nick);
+    //snprintf(tmp,sizeof(tmp)-1,"KICK %s :%s\r\nNICK dodged\r\n",from,msg+5);
+    snprintf(tmp,sizeof(tmp)-1,"KICK %s %s :%s\r\nNICK dodged\r\n",from,user->nick,tmp2+1);
     mywrite(fd,tmp);
     message_handler(fd,from,user,"lambda !raw nick %$segnick=%r",0);
     return;
